@@ -358,13 +358,22 @@ function esc(s) {
 }
 
 window.cancelUpload = function() {
+  if (!uploadState || !uploadState.active) return;
   uploadCanceled = true;
+  setUploadState({
+    ...uploadState,
+    currentFile: '正在取消上传...',
+  });
   if (currentUploadXHR) {
     currentUploadXHR.abort();
   }
 };
 
 async function uploadFiles(fileList, isFolder = false) {
+  if (uploadState && uploadState.active) {
+    toast('已有上传任务进行中');
+    return;
+  }
   const files = Array.from(fileList);
   if (!files.length) return;
   const folderName = isFolder ? getFolderRoot(files) : null;
@@ -403,6 +412,7 @@ async function uploadFiles(fileList, isFolder = false) {
 
     try {
       const data = await uploadSingleFile(fd, loaded => {
+        if (uploadCanceled) return;
         setUploadState({
           active: true,
           mode: isFolder ? 'folder' : 'files',
@@ -417,11 +427,15 @@ async function uploadFiles(fileList, isFolder = false) {
           currentPercent: file.size ? Math.min(100, loaded / file.size * 100) : 100,
         });
       });
+      if (uploadCanceled) break;
       if (data.error) failed++;
       else done++;
     } catch (e) {
+      if (uploadCanceled || e.message === 'Upload canceled') break;
       failed++;
     }
+
+    if (uploadCanceled) break;
 
     uploadedBytes += file.size || 0;
     setUploadState({
@@ -455,6 +469,7 @@ async function uploadFiles(fileList, isFolder = false) {
 
   const input = document.getElementById(isFolder ? 'folderInput' : 'fileInput');
   if (input) input.value = '';
+  currentUploadXHR = null;
   
   if (uploadCanceled) toast('上传已取消');
   else toast(files.length === 1 ? (done ? \`已上传：\${files[0].name}\` : '上传失败') : \`上传完成：\${done} 成功，\${failed} 失败\`);
@@ -480,11 +495,22 @@ function uploadSingleFile(formData, onProgress) {
       if (event.lengthComputable) onProgress(event.loaded);
     };
     xhr.onload = () => {
+      currentUploadXHR = null;
+      if (uploadCanceled) {
+        reject(new Error('Upload canceled'));
+        return;
+      }
       const data = xhr.response || JSON.parse(xhr.responseText || '{}');
       resolve(data);
     };
-    xhr.onerror = () => reject(new Error('Upload failed'));
-    xhr.onabort = () => reject(new Error('Upload canceled'));
+    xhr.onerror = () => {
+      currentUploadXHR = null;
+      reject(new Error('Upload failed'));
+    };
+    xhr.onabort = () => {
+      currentUploadXHR = null;
+      reject(new Error('Upload canceled'));
+    };
     xhr.send(formData);
   });
 }
@@ -511,22 +537,42 @@ function renderUploadStatus() {
     ? Math.min(100, uploadState.uploadedBytes / uploadState.totalBytes * 100)
     : 100;
 
-  el.innerHTML = \`<div class="upload-status">
-    <div class="upload-meta">
-      <span>目标：\${esc(uploadState.label || '')}</span>
-      <span>模式：\${uploadState.mode === 'folder' ? '文件夹上传' : '文件上传'}</span>
-      <span>进度：\${uploadState.completedFiles}/\${uploadState.totalFiles}</span>
-      <span>结果：\${uploadState.successFiles} 成功 / \${uploadState.failedFiles} 失败</span>
-    </div>
-    <div class="upload-current">当前：\${esc(uploadState.currentFile || '')}</div>
-    <div class="progress-bar"><div class="progress-bar-fill" style="width:\${overallPercent}%"></div></div>
-    <div class="upload-meta" style="margin-top:8px;margin-bottom:0">
-      <span>总进度：\${overallPercent.toFixed(1)}%</span>
-      <span>当前文件：\${(uploadState.currentPercent || 0).toFixed(1)}%</span>
-      <span>已上传：\${formatSize(uploadState.uploadedBytes)} / \${formatSize(uploadState.totalBytes)}</span>
-    </div>
-    \${uploadState.active && !uploadCanceled ? '<button class="btn btn-sm btn-outline" style="margin-top:12px;width:100%" onclick="cancelUpload()">取消上传</button>' : ''}
-  </div>\`;
+  if (!el.querySelector('.upload-status')) {
+    el.innerHTML = '<div class="upload-status">'
+      + '<div class="upload-meta">'
+      + '<span id="uploadLabel"></span>'
+      + '<span id="uploadMode"></span>'
+      + '<span id="uploadCount"></span>'
+      + '<span id="uploadResult"></span>'
+      + '</div>'
+      + '<div class="upload-current" id="uploadCurrent"></div>'
+      + '<div class="progress-bar"><div class="progress-bar-fill" id="uploadProgressFill"></div></div>'
+      + '<div class="upload-meta" style="margin-top:8px;margin-bottom:0">'
+      + '<span id="uploadOverall"></span>'
+      + '<span id="uploadCurrentPercent"></span>'
+      + '<span id="uploadBytes"></span>'
+      + '</div>'
+      + '<button id="uploadCancelBtn" class="btn btn-sm btn-outline" style="margin-top:12px;width:100%">取消上传</button>'
+      + '</div>';
+    el.querySelector('#uploadCancelBtn')?.addEventListener('click', () => window.cancelUpload());
+  }
+
+  el.querySelector('#uploadLabel').textContent = '目标：' + (uploadState.label || '');
+  el.querySelector('#uploadMode').textContent = '模式：' + (uploadState.mode === 'folder' ? '文件夹上传' : '文件上传');
+  el.querySelector('#uploadCount').textContent = '进度：' + uploadState.completedFiles + '/' + uploadState.totalFiles;
+  el.querySelector('#uploadResult').textContent = '结果：' + uploadState.successFiles + ' 成功 / ' + uploadState.failedFiles + ' 失败';
+  el.querySelector('#uploadCurrent').textContent = '当前：' + (uploadState.currentFile || '');
+  el.querySelector('#uploadProgressFill').style.width = overallPercent + '%';
+  el.querySelector('#uploadOverall').textContent = '总进度：' + overallPercent.toFixed(1) + '%';
+  el.querySelector('#uploadCurrentPercent').textContent = '当前文件：' + (uploadState.currentPercent || 0).toFixed(1) + '%';
+  el.querySelector('#uploadBytes').textContent = '已上传：' + formatSize(uploadState.uploadedBytes) + ' / ' + formatSize(uploadState.totalBytes);
+
+  const cancelBtn = el.querySelector('#uploadCancelBtn');
+  if (cancelBtn) {
+    cancelBtn.style.display = uploadState.active ? 'block' : 'none';
+    cancelBtn.disabled = uploadCanceled || !currentUploadXHR;
+    cancelBtn.textContent = uploadCanceled ? '正在取消...' : '取消上传';
+  }
 }
 
 function renderFileTable(files) {

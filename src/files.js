@@ -2,6 +2,13 @@ import { json, error, generateUUID, generateToken } from './utils.js';
 import { trackUsage, checkLimits, updateStorageUsage } from './usage.js';
 
 export async function handleUpload(request, env) {
+  const abortSignal = request.signal;
+  let requestAborted = abortSignal?.aborted === true;
+  const onAbort = () => {
+    requestAborted = true;
+  };
+  abortSignal?.addEventListener('abort', onAbort, { once: true });
+
   // Check limits
   const r2Check = await checkLimits(env, 'r2_class_a');
   if (!r2Check.allowed) return error(r2Check.reason, 429);
@@ -24,36 +31,50 @@ export async function handleUpload(request, env) {
   const id = generateUUID();
   const r2Key = `files/${id}/${relativePath || storedName}`;
 
-  // Upload to R2
-  await env.BUCKET.put(r2Key, file.stream(), {
-    httpMetadata: { contentType: file.type || 'application/octet-stream' },
-    customMetadata: {
-      originalName: storedName,
-      relativePath: relativePath || storedName,
-      folderName: folderName || '',
-    },
-  });
+  try {
+    if (requestAborted) return error('Upload canceled', 499);
 
-  // Save metadata to D1
-  await env.DB.prepare(
-    'INSERT INTO files (id, filename, size, content_type, r2_key, folder_name, relative_path, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).bind(
-    id,
-    storedName,
-    file.size,
-    file.type || 'application/octet-stream',
-    r2Key,
-    folderName,
-    relativePath,
-    folderId,
-  ).run();
+    await env.BUCKET.put(r2Key, file.stream(), {
+      httpMetadata: { contentType: file.type || 'application/octet-stream' },
+      customMetadata: {
+        originalName: storedName,
+        relativePath: relativePath || storedName,
+        folderName: folderName || '',
+      },
+    });
 
-  // Track usage
-  await trackUsage(env, 'r2_class_a');
-  await trackUsage(env, 'd1_write');
-  await updateStorageUsage(env);
+    if (requestAborted) {
+      await env.BUCKET.delete(r2Key);
+      return error('Upload canceled', 499);
+    }
 
-  return json({ id, filename: storedName, size: file.size, folderName, relativePath, folderId });
+    await env.DB.prepare(
+      'INSERT INTO files (id, filename, size, content_type, r2_key, folder_name, relative_path, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(
+      id,
+      storedName,
+      file.size,
+      file.type || 'application/octet-stream',
+      r2Key,
+      folderName,
+      relativePath,
+      folderId,
+    ).run();
+
+    if (requestAborted) {
+      await env.BUCKET.delete(r2Key);
+      await env.DB.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+      return error('Upload canceled', 499);
+    }
+
+    await trackUsage(env, 'r2_class_a');
+    await trackUsage(env, 'd1_write');
+    await updateStorageUsage(env);
+
+    return json({ id, filename: storedName, size: file.size, folderName, relativePath, folderId });
+  } finally {
+    abortSignal?.removeEventListener('abort', onAbort);
+  }
 }
 
 export async function handleListFiles(env) {
