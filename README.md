@@ -92,12 +92,12 @@ bucket_name = "cloudflare-share-bucket"   # ← 替换为真实桶名
 ```toml
 name = "cloudflare-share"
 main = "src/index.js"
-compatibility_date = "2024-12-01"
+compatibility_date = "2026-03-10"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "cloudflare-share-db"
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+database_id = "xxxxxxxx-xxxxxx-xxxxx-xxxxx"
 
 [[r2_buckets]]
 binding = "BUCKET"
