@@ -4,3 +4,4 @@ node_modules/
 dist/
 .mf/
 wrangler.toml
+package-lock.json

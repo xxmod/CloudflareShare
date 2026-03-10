@@ -152,6 +152,47 @@ npm test
 
 ---
 
+## 忘记密码 / 重置密码
+
+系统为单用户，密码以 SHA-256 哈希存储在 D1 数据库中。忘记密码后无法在页面找回，需通过以下步骤手动重置。
+
+### 第一步：计算新密码的 SHA-256 哈希
+
+在本地终端运行（将 `newpassword` 替换为你想设置的新密码）：
+
+```bash
+node -e "const c=require('crypto');console.log(c.createHash('sha256').update('newpassword').digest('hex'))"
+```
+
+输出示例：
+
+```
+74c04d93b7b37c08884a8c5f66b9ab70d5551cf77c315f00dfe7e92e5f5cbfa5
+```
+
+### 第二步：将新哈希写入 D1
+
+```bash
+wrangler d1 execute cloudflare-share-db --remote --command \
+  "UPDATE user SET password_hash = '74c04d93b7b37c08884a8c5f66b9ab70d5551cf77c315f00dfe7e92e5f5cbfa5' WHERE id = 1"
+```
+
+> 将单引号内的哈希值替换为上一步实际输出的结果。
+
+执行成功后，使用新密码登录即可。
+
+### 备选：在 Cloudflare Dashboard 执行
+
+1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **D1**
+2. 选择 `cloudflare-share-db` → 点击 **Console**
+3. 执行以下 SQL（替换哈希值）：
+
+```sql
+UPDATE user SET password_hash = '74c04d93b7b37c08884a8c5f66b9ab70d5551cf77c315f00dfe7e92e5f5cbfa5' WHERE id = 1;
+```
+
+---
+
 ## 目录结构
 
 ```
