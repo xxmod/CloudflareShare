@@ -1,6 +1,6 @@
 import { json, error } from './utils.js';
-import { authenticate, requireAuth, handleLogin, handleLogout, handleSetup, handleCheckSetup } from './auth.js';
-import { handleUpload, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare } from './files.js';
+import { authenticate, requireAuth, handleLogin, handleLogout, handleSetup, handleCheckSetup, handleChangePassword } from './auth.js';
+import { handleUpload, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder } from './files.js';
 import { getUsageStats, updateLimits } from './usage.js';
 import { getAppHTML, getSharePageHTML } from './frontend.js';
 import { migrate } from './migrate.js';
@@ -32,7 +32,7 @@ export default {
         return handleGetByShareKey(url.searchParams.get('key'), env);
       }
       if (path === '/api/share/download' && method === 'GET') {
-        return handleDownloadByShareKey(url.searchParams.get('key'), env);
+        return handleDownloadByShareKey(url.searchParams.get('key'), env, url.searchParams.get('id'));
       }
 
       // --- API routes ---
@@ -64,6 +64,8 @@ export default {
         const authErr = await requireAuth(request, env);
         if (authErr) return authErr;
 
+        if (path === '/api/auth/password' && method === 'POST') return handleChangePassword(request, env);
+
         // Files
         if (path === '/api/files' && method === 'GET') return handleListFiles(env);
         if (path === '/api/files/upload' && method === 'POST') return handleUpload(request, env);
@@ -89,6 +91,14 @@ export default {
         if (path === '/api/files/batch-unshare' && method === 'POST') {
           const { ids } = await request.json();
           return handleBatchUnshare(ids, env);
+        }
+        if (path === '/api/folders/share' && method === 'POST') {
+          const { folderId, folderName } = await request.json();
+          return handleShareFolder({ folderId, folderName }, env);
+        }
+        if (path === '/api/folders/unshare' && method === 'POST') {
+          const { folderId, folderName } = await request.json();
+          return handleUnshareFolder({ folderId, folderName }, env);
         }
 
         // Usage

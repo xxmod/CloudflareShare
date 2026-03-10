@@ -104,6 +104,20 @@ th{border-bottom:2px solid #000;font-weight:700;text-transform:uppercase;font-si
 .empty{text-align:center;padding:40px;color:#999}
 .login-card{max-width:400px;margin:100px auto;border:3px solid #000;padding:40px}
 .login-card h2{margin-bottom:24px;font-size:24px}
+.upload-status{border:2px solid #000;padding:14px;margin:-8px 0 16px;background:#fafafa}
+.upload-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:8px;color:#444}
+.upload-current{font-size:13px;font-weight:700;margin-bottom:8px;word-break:break-all}
+.folder-row td{background:#f7f7f7;border-top:2px solid #000;border-bottom:1px solid #eee;font-weight:700}
+.folder-name{display:flex;align-items:center;gap:8px}
+.folder-toggle{background:none;border:none;font-size:14px;cursor:pointer;color:#000;padding:0}
+.folder-path{font-size:12px;color:#666;font-weight:400}
+.file-subpath{font-size:12px;color:#666;margin-top:2px}
+.file-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.share-tree{border:2px solid #000;padding:12px;background:#fff}
+.share-tree-item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #eee}
+.share-tree-item:last-child{border-bottom:none}
+.share-tree-path{font-size:13px;font-weight:700;word-break:break-all}
+.share-tree-meta{font-size:12px;color:#666;margin-top:2px}
 `;
 }
 
@@ -111,6 +125,13 @@ function appScript() {
   return `
 const API = '/api';
 let currentTab = 'files';
+let uploadState = null;
+let currentUploadXHR = null;
+let uploadCanceled = false;
+const expandedFolders = new Set();
+const selectedIds = new Set();
+let currentFiles = [];
+let folderLookup = {};
 
 const app = document.getElementById('app');
 
@@ -181,10 +202,10 @@ window.doSetup = doSetup;
 
 function renderLogin() {
   app.innerHTML = \`
-  <div style="max-width:800px;margin:60px auto;padding:20px">
+  <div style="max-width:400px;margin:60px auto;padding:20px">
     <h1 style="text-align:center;margin-bottom:8px;font-size:26px;letter-spacing:-1px">CloudflareShare</h1>
     <p style="text-align:center;color:#999;font-size:13px;margin-bottom:32px">文件存储与分享</p>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+    <div style="display:flex;flex-direction:column;gap:24px">
       <div class="card">
         <h3 style="margin-bottom:16px">管理员登录</h3>
         <div class="form-group"><label>用户名</label><input id="lu" type="text" placeholder="用户名" autocomplete="username"></div>
@@ -214,6 +235,10 @@ async function lookupKey() {
       r.innerHTML = \`<div style="padding:12px;border:1px solid #ddd;color:#666;font-size:13px">\${esc(data.error)}</div>\`;
       return;
     }
+    if (data.type === 'folder') {
+      r.innerHTML = renderSharedFolderResult(key, data);
+      return;
+    }
     r.innerHTML = \`<div style="padding:12px;border:2px solid #000">
       <div style="font-weight:700;font-size:14px;margin-bottom:4px">\${esc(data.filename)}</div>
       <div style="font-size:12px;color:#666;margin-bottom:12px">\${formatSize(data.size)}</div>
@@ -222,6 +247,20 @@ async function lookupKey() {
   } catch(e) { r.innerHTML = '<div style="padding:12px;border:1px solid #ddd;color:#666;font-size:13px">查找失败</div>'; }
 }
 window.lookupKey = lookupKey;
+
+function renderSharedFolderResult(key, data) {
+  return \`<div style="padding:12px;border:2px solid #000">
+    <div style="font-weight:700;font-size:14px;margin-bottom:4px">文件夹：\${esc(data.folderName || '未命名文件夹')}</div>
+    <div style="font-size:12px;color:#666;margin-bottom:12px">\${data.files.length} 个文件</div>
+    <div class="share-tree">\${data.files.map(file => \`<div class="share-tree-item">
+      <div>
+        <div class="share-tree-path">\${esc(getShareDisplayPath(file, data.folderName))}</div>
+        <div class="share-tree-meta">\${formatSize(file.size)}</div>
+      </div>
+      <a href="/api/share/download?key=\${encodeURIComponent(key)}&id=\${encodeURIComponent(file.id)}" class="btn btn-sm">下载</a>
+    </div>\`).join('')}</div>
+  </div>\`;
+}
 
 async function doLogin() {
   const u = document.getElementById('lu').value;
@@ -245,7 +284,10 @@ function renderApp() {
   <div class="container">
     <header>
       <h1>CloudflareShare</h1>
-      <nav><button class="btn btn-sm btn-outline" onclick="doLogout()">退出</button></nav>
+      <nav>
+        <button class="btn btn-sm btn-outline" onclick="showPasswordModal()">修改密码</button>
+        <button class="btn btn-sm btn-outline" onclick="doLogout()">退出</button>
+      </nav>
     </header>
     <div class="tab-bar">
       <div class="tab \${currentTab==='files'?'active':''}" onclick="switchTab('files')">文件管理</div>
@@ -277,10 +319,11 @@ async function loadFiles() {
     <p style="font-size:15px;font-weight:700;margin-bottom:4px">拖拽文件到此处上传</p>
     <p style="font-size:12px;color:#666;margin-bottom:12px">或使用按钮选择文件 / 文件夹</p>
     <div style="display:flex;gap:8px;justify-content:center">
-      <label class="btn btn-sm" style="cursor:pointer">选择文件<input type="file" id="fileInput" style="display:none" multiple onchange="uploadFiles(this.files)"></label>
-      <label class="btn btn-sm btn-outline" style="cursor:pointer">上传文件夹<input type="file" id="folderInput" style="display:none" webkitdirectory onchange="uploadFiles(this.files)"></label>
+      <label class="btn btn-sm" style="cursor:pointer">选择文件<input type="file" id="fileInput" style="display:none" multiple onchange="uploadFiles(this.files, false)"></label>
+      <label class="btn btn-sm btn-outline" style="cursor:pointer">上传文件夹<input type="file" id="folderInput" style="display:none" webkitdirectory onchange="uploadFiles(this.files, true)"></label>
     </div>
   </div>
+  <div id="uploadStatus"></div>
   <div id="batchBar" style="display:none;margin-bottom:10px;padding:10px 14px;border:2px solid #000;align-items:center;gap:8px;flex-wrap:wrap">
     <span id="batchCount" style="font-size:13px;font-weight:700;margin-right:4px"></span>
     <button class="btn btn-sm btn-outline" onclick="batchShare()">批量分享</button>
@@ -293,33 +336,18 @@ async function loadFiles() {
   const dz = document.getElementById('dropzone');
   dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
   dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
-  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('dragover'); uploadFiles(e.dataTransfer.files); });
+  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('dragover'); uploadFiles(e.dataTransfer.files, false); });
+
+  renderUploadStatus();
 
   const r = await api('/files');
   const files = await r.json();
+  currentFiles = files;
   const fl = document.getElementById('fileList');
   if (!files.length) { fl.innerHTML = '<div class="empty">暂无文件</div>'; return; }
 
-  fl.innerHTML = \`<table>
-    <thead><tr>
-      <th style="width:32px"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)"></th>
-      <th>文件名</th><th>大小</th><th>上传时间</th><th>分享状态</th><th>操作</th>
-    </tr></thead>
-    <tbody>\${files.map(f => \`<tr>
-      <td><input type="checkbox" class="file-check" data-id="\${f.id}" onchange="updateBatch()"></td>
-      <td>\${esc(f.filename)}</td>
-      <td>\${formatSize(f.size)}</td>
-      <td>\${f.uploaded_at}</td>
-      <td>\${f.share_key ? '<span style="color:#000">●已分享</span>' : '<span style="color:#999">○未分享</span>'}</td>
-      <td class="actions">
-        <button class="btn btn-sm" onclick="downloadFile('\${f.id}')">下载</button>
-        \${f.share_key
-          ? \`<button class="btn btn-sm btn-outline" onclick="showShareInfo('\${f.id}','\${f.share_key}')">分享信息</button>
-             <button class="btn btn-sm btn-danger" onclick="unshareFile('\${f.id}')">取消分享</button>\`
-          : \`<button class="btn btn-sm btn-outline" onclick="shareFile('\${f.id}')">分享</button>\`}
-        <button class="btn btn-sm btn-danger" onclick="deleteFile('\${f.id}')">删除</button>
-      </td>
-    </tr>\`).join('')}</tbody></table>\`;
+  fl.innerHTML = renderFileTable(files);
+  updateBatch();
 }
 window.loadFiles = loadFiles;
 
@@ -329,26 +357,292 @@ function esc(s) {
   return d.innerHTML;
 }
 
-async function uploadFiles(fileList) {
+window.cancelUpload = function() {
+  uploadCanceled = true;
+  if (currentUploadXHR) {
+    currentUploadXHR.abort();
+  }
+};
+
+async function uploadFiles(fileList, isFolder = false) {
   const files = Array.from(fileList);
   if (!files.length) return;
-  if (files.length > 1) toast(\`开始上传 \${files.length} 个文件...\`);
-  let done = 0, failed = 0;
+  const folderName = isFolder ? getFolderRoot(files) : null;
+  const folderId = isFolder ? crypto.randomUUID() : null;
+  const totalBytes = files.reduce((sum, file) => sum + (file.size || 0), 0);
+  let done = 0;
+  let failed = 0;
+  let uploadedBytes = 0;
+
+  uploadCanceled = false;
+
+  setUploadState({
+    active: true,
+    mode: isFolder ? 'folder' : 'files',
+    label: isFolder ? folderName : '文件上传',
+    totalFiles: files.length,
+    completedFiles: 0,
+    successFiles: 0,
+    failedFiles: 0,
+    totalBytes,
+    uploadedBytes: 0,
+    currentFile: files[0].webkitRelativePath || files[0].name,
+    currentPercent: 0,
+  });
+
   for (const file of files) {
-    const name = file.webkitRelativePath || file.name;
+    if (uploadCanceled) break;
+    const relativePath = file.webkitRelativePath || file.name;
     const fd = new FormData();
-    fd.append('file', file, name);
+    fd.append('file', file, file.name);
+    if (isFolder) {
+      fd.append('folderName', folderName);
+      fd.append('relativePath', relativePath);
+      fd.append('folderId', folderId);
+    }
+
     try {
-      const r = await fetch(API + '/files/upload', { method: 'POST', body: fd });
-      const d = await r.json();
-      if (d.error) { failed++; continue; }
-      done++;
-    } catch(e) { failed++; }
+      const data = await uploadSingleFile(fd, loaded => {
+        setUploadState({
+          active: true,
+          mode: isFolder ? 'folder' : 'files',
+          label: isFolder ? folderName : '文件上传',
+          totalFiles: files.length,
+          completedFiles: done + failed,
+          successFiles: done,
+          failedFiles: failed,
+          totalBytes,
+          uploadedBytes: uploadedBytes + loaded,
+          currentFile: relativePath,
+          currentPercent: file.size ? Math.min(100, loaded / file.size * 100) : 100,
+        });
+      });
+      if (data.error) failed++;
+      else done++;
+    } catch (e) {
+      failed++;
+    }
+
+    uploadedBytes += file.size || 0;
+    setUploadState({
+      active: true,
+      mode: isFolder ? 'folder' : 'files',
+      label: isFolder ? folderName : '文件上传',
+      totalFiles: files.length,
+      completedFiles: done + failed,
+      successFiles: done,
+      failedFiles: failed,
+      totalBytes,
+      uploadedBytes,
+      currentFile: relativePath,
+      currentPercent: 100,
+    });
   }
-  toast(files.length === 1 ? (done ? \`已上传：\${files[0].name}\` : '上传失败') : \`上传完成：\${done} 成功，\${failed} 失败\`);
+
+  setUploadState({
+    active: false,
+    mode: isFolder ? 'folder' : 'files',
+    label: isFolder ? folderName : '文件上传',
+    totalFiles: files.length,
+    completedFiles: done + failed,
+    successFiles: done,
+    failedFiles: failed,
+    totalBytes,
+    uploadedBytes,
+    currentFile: uploadCanceled ? '已取消上传' : (failed ? '部分文件上传失败' : '上传完成'),
+    currentPercent: 100,
+  });
+
+  const input = document.getElementById(isFolder ? 'folderInput' : 'fileInput');
+  if (input) input.value = '';
+  
+  if (uploadCanceled) toast('上传已取消');
+  else toast(files.length === 1 ? (done ? \`已上传：\${files[0].name}\` : '上传失败') : \`上传完成：\${done} 成功，\${failed} 失败\`);
+  
+  setTimeout(() => {
+    if (uploadState && !uploadState.active) {
+      uploadState = null;
+      renderUploadStatus();
+    }
+  }, 5000);
   loadFiles();
 }
 window.uploadFiles = uploadFiles;
+
+function uploadSingleFile(formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    currentUploadXHR = xhr;
+    xhr.open('POST', API + '/files/upload');
+    xhr.responseType = 'json';
+    xhr.upload.onprogress = event => {
+      if (uploadCanceled) { xhr.abort(); return; }
+      if (event.lengthComputable) onProgress(event.loaded);
+    };
+    xhr.onload = () => {
+      const data = xhr.response || JSON.parse(xhr.responseText || '{}');
+      resolve(data);
+    };
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.onabort = () => reject(new Error('Upload canceled'));
+    xhr.send(formData);
+  });
+}
+
+function getFolderRoot(files) {
+  const firstPath = files[0]?.webkitRelativePath || '';
+  return firstPath.split('/')[0] || 'folder';
+}
+
+function setUploadState(next) {
+  uploadState = next;
+  renderUploadStatus();
+}
+
+function renderUploadStatus() {
+  const el = document.getElementById('uploadStatus');
+  if (!el) return;
+  if (!uploadState) {
+    el.innerHTML = '';
+    return;
+  }
+
+  const overallPercent = uploadState.totalBytes
+    ? Math.min(100, uploadState.uploadedBytes / uploadState.totalBytes * 100)
+    : 100;
+
+  el.innerHTML = \`<div class="upload-status">
+    <div class="upload-meta">
+      <span>目标：\${esc(uploadState.label || '')}</span>
+      <span>模式：\${uploadState.mode === 'folder' ? '文件夹上传' : '文件上传'}</span>
+      <span>进度：\${uploadState.completedFiles}/\${uploadState.totalFiles}</span>
+      <span>结果：\${uploadState.successFiles} 成功 / \${uploadState.failedFiles} 失败</span>
+    </div>
+    <div class="upload-current">当前：\${esc(uploadState.currentFile || '')}</div>
+    <div class="progress-bar"><div class="progress-bar-fill" style="width:\${overallPercent}%"></div></div>
+    <div class="upload-meta" style="margin-top:8px;margin-bottom:0">
+      <span>总进度：\${overallPercent.toFixed(1)}%</span>
+      <span>当前文件：\${(uploadState.currentPercent || 0).toFixed(1)}%</span>
+      <span>已上传：\${formatSize(uploadState.uploadedBytes)} / \${formatSize(uploadState.totalBytes)}</span>
+    </div>
+    \${uploadState.active && !uploadCanceled ? '<button class="btn btn-sm btn-outline" style="margin-top:12px;width:100%" onclick="cancelUpload()">取消上传</button>' : ''}
+  </div>\`;
+}
+
+function renderFileTable(files) {
+  const grouped = groupFiles(files);
+  folderLookup = Object.fromEntries(grouped.folders.map(folder => [folder.encodedKey, folder]));
+  const rows = [];
+
+  for (const folder of grouped.folders) {
+    rows.push(renderFolderRow(folder));
+    if (expandedFolders.has(folder.encodedKey)) {
+      rows.push(folder.files.map(file => renderFileRow(file, true, folder.name)).join(''));
+    }
+  }
+
+  if (grouped.files.length) {
+    rows.push(grouped.files.map(file => renderFileRow(file, false)).join(''));
+  }
+
+  return \`<table>
+    <thead><tr>
+      <th style="width:32px"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)"></th>
+      <th>文件 / 文件夹</th><th>大小</th><th>上传时间</th><th>分享状态</th><th>操作</th>
+    </tr></thead>
+    <tbody>\${rows.join('')}</tbody></table>\`;
+}
+
+function groupFiles(files) {
+  const folders = new Map();
+  const normalFiles = [];
+
+  for (const file of files) {
+    if (file.folder_name) {
+      const groupKey = file.folder_id || 'legacy:' + file.folder_name;
+      const encodedKey = encodeURIComponent(groupKey);
+      if (!folders.has(groupKey)) {
+        folders.set(groupKey, {
+          key: groupKey,
+          encodedKey,
+          name: file.folder_name,
+          folderId: file.folder_id,
+          files: [],
+          totalSize: 0,
+          folderShareKey: null,
+        });
+      }
+      const folder = folders.get(groupKey);
+      folder.files.push(file);
+      folder.totalSize += Number(file.size || 0);
+      if (file.folder_share_key) folder.folderShareKey = file.folder_share_key;
+    } else {
+      normalFiles.push(file);
+    }
+  }
+
+  return {
+    folders: [...folders.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')),
+    files: normalFiles,
+  };
+}
+
+function renderFolderRow(folder) {
+  const encoded = folder.encodedKey;
+  const count = folder.files.filter(file => selectedIds.has(file.id)).length;
+  const allSelected = count > 0 && count === folder.files.length;
+  const partialSelected = count > 0 && count < folder.files.length;
+  return \`<tr class="folder-row">
+    <td><input type="checkbox" class="folder-check" data-folder="\${encoded}" onchange="toggleFolderSelection('\${encoded}', this.checked)" \${allSelected ? 'checked' : ''} \${partialSelected ? 'data-partial="1"' : ''}></td>
+    <td>
+      <div class="folder-name">
+        <button class="folder-toggle" onclick="toggleFolderCollapse('\${encoded}')">\${expandedFolders.has(encoded) ? '▾' : '▸'}</button>
+        <span>文件夹：\${esc(folder.name)}</span>
+      </div>
+      <div class="folder-path">\${folder.files.length} 个文件</div>
+    </td>
+    <td>\${formatSize(folder.totalSize)}</td>
+    <td>\${folder.files[0]?.uploaded_at || '-'}</td>
+    <td>\${folder.folderShareKey ? '<span style="color:#000">●文件夹已分享</span>' : '<span style="color:#666">○未分享</span>'}</td>
+    <td><div class="file-actions">
+      <button class="btn btn-sm btn-outline" onclick="toggleFolderSelection('\${encoded}', true)">选择</button>
+      \${folder.folderShareKey
+        ? \`<button class="btn btn-sm btn-outline" onclick="showFolderShareInfo('\${encoded}')">分享信息</button>
+           <button class="btn btn-sm btn-danger" onclick="unshareFolder('\${encoded}')">取消分享</button>\`
+        : \`<button class="btn btn-sm btn-outline" onclick="shareFolder('\${encoded}')">分享文件夹</button>\`}
+      <button class="btn btn-sm btn-danger" onclick="deleteFolder('\${encoded}')">删除文件夹</button>
+    </div></td>
+  </tr>\`;
+}
+
+function renderFileRow(file, isNested, folderName) {
+  const encodedFolder = file.folder_name ? encodeURIComponent(file.folder_id || 'legacy:' + file.folder_name) : '';
+  const subpath = isNested ? getFolderSubpath(file, folderName) : '';
+  return \`<tr>
+    <td><input type="checkbox" class="file-check" data-id="\${file.id}" data-folder="\${encodedFolder}" onchange="setFileSelection('\${file.id}', this.checked)" \${selectedIds.has(file.id) ? 'checked' : ''}></td>
+    <td>
+      <div>\${esc(file.filename)}</div>
+      \${subpath ? \`<div class="file-subpath">\${esc(subpath)}</div>\` : ''}
+    </td>
+    <td>\${formatSize(file.size)}</td>
+    <td>\${file.uploaded_at}</td>
+    <td>\${file.share_key ? '<span style="color:#000">●已分享</span>' : file.folder_share_key ? '<span style="color:#666">◐文件夹已分享</span>' : '<span style="color:#999">○未分享</span>'}</td>
+    <td><div class="file-actions">
+      <button class="btn btn-sm" onclick="downloadFile('\${file.id}')">下载</button>
+      \${file.share_key
+        ? \`<button class="btn btn-sm btn-outline" onclick="showShareInfo('\${file.id}','\${file.share_key}')">分享信息</button>
+           <button class="btn btn-sm btn-danger" onclick="unshareFile('\${file.id}')">取消分享</button>\`
+        : \`<button class="btn btn-sm btn-outline" onclick="shareFile('\${file.id}')">分享</button>\`}
+      <button class="btn btn-sm btn-danger" onclick="deleteFile('\${file.id}')">删除</button>
+    </div></td>
+  </tr>\`;
+}
+
+function getFolderSubpath(file, folderName) {
+  if (!file.relative_path) return '';
+  const prefix = folderName + '/';
+  return file.relative_path.startsWith(prefix) ? file.relative_path.slice(prefix.length) : file.relative_path;
+}
 
 async function downloadFile(id) {
   window.open(API + '/files/' + id + '/download', '_blank');
@@ -406,8 +700,15 @@ window.deleteFile = deleteFile;
 
 // --- Batch operations ---
 function getSelectedIds() {
-  return [...document.querySelectorAll('.file-check:checked')].map(c => c.dataset.id);
+  return [...selectedIds];
 }
+
+function setFileSelection(id, checked) {
+  if (checked) selectedIds.add(id);
+  else selectedIds.delete(id);
+  updateBatch();
+}
+window.setFileSelection = setFileSelection;
 
 function updateBatch() {
   const ids = getSelectedIds();
@@ -418,15 +719,27 @@ function updateBatch() {
   if (ct) ct.textContent = ids.length + ' 个文件已选';
   const sa = document.getElementById('selectAll');
   if (sa) {
-    const all = document.querySelectorAll('.file-check');
-    sa.indeterminate = ids.length > 0 && ids.length < all.length;
-    sa.checked = all.length > 0 && ids.length === all.length;
+    sa.indeterminate = ids.length > 0 && ids.length < currentFiles.length;
+    sa.checked = currentFiles.length > 0 && ids.length === currentFiles.length;
   }
+
+  document.querySelectorAll('.file-check').forEach(input => {
+    input.checked = selectedIds.has(input.dataset.id);
+  });
+
+  document.querySelectorAll('.folder-check').forEach(folderCheck => {
+    const folder = folderLookup[folderCheck.dataset.folder];
+    const checked = folder ? folder.files.filter(file => selectedIds.has(file.id)).length : 0;
+    const total = folder ? folder.files.length : 0;
+    folderCheck.indeterminate = checked > 0 && checked < total;
+    folderCheck.checked = total > 0 && checked === total;
+  });
 }
 window.updateBatch = updateBatch;
 
 function toggleSelectAll(checked) {
-  document.querySelectorAll('.file-check').forEach(c => { c.checked = checked; });
+  selectedIds.clear();
+  if (checked) currentFiles.forEach(file => selectedIds.add(file.id));
   updateBatch();
 }
 window.toggleSelectAll = toggleSelectAll;
@@ -434,10 +747,103 @@ window.toggleSelectAll = toggleSelectAll;
 function clearSelect() {
   const sa = document.getElementById('selectAll');
   if (sa) sa.checked = false;
-  document.querySelectorAll('.file-check').forEach(c => { c.checked = false; });
+  selectedIds.clear();
   updateBatch();
 }
 window.clearSelect = clearSelect;
+
+function toggleFolderCollapse(encodedFolder) {
+  if (expandedFolders.has(encodedFolder)) expandedFolders.delete(encodedFolder);
+  else expandedFolders.add(encodedFolder);
+  loadFiles();
+}
+window.toggleFolderCollapse = toggleFolderCollapse;
+
+function toggleFolderSelection(encodedFolder, checked) {
+  const folder = folderLookup[encodedFolder];
+  if (!folder) return;
+  folder.files.forEach(file => {
+    if (checked) selectedIds.add(file.id);
+    else selectedIds.delete(file.id);
+  });
+  updateBatch();
+}
+window.toggleFolderSelection = toggleFolderSelection;
+
+function getFolderIds(encodedFolder) {
+  return folderLookup[encodedFolder]?.files.map(file => file.id) || [];
+}
+
+async function shareFolder(encodedFolder) {
+  const folder = folderLookup[encodedFolder];
+  if (!folder) return;
+  const r = await api('/folders/share', {
+    method: 'POST',
+    body: JSON.stringify({ folderId: folder.folderId, folderName: folder.name }),
+  });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  toast('文件夹分享已创建');
+  loadFiles();
+  showFolderShareModal(folder.name, d.shareKey, d.fileCount);
+}
+window.shareFolder = shareFolder;
+
+async function unshareFolder(encodedFolder) {
+  const folder = folderLookup[encodedFolder];
+  if (!folder) return;
+  if (!confirm('确认取消该文件夹的分享？')) return;
+  const r = await api('/folders/unshare', {
+    method: 'POST',
+    body: JSON.stringify({ folderId: folder.folderId, folderName: folder.name }),
+  });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  toast('文件夹分享已取消');
+  loadFiles();
+}
+window.unshareFolder = unshareFolder;
+
+function showFolderShareInfo(encodedFolder) {
+  const folder = folderLookup[encodedFolder];
+  if (!folder?.folderShareKey) return;
+  showFolderShareModal(folder.name, folder.folderShareKey, folder.files.length);
+}
+window.showFolderShareInfo = showFolderShareInfo;
+
+function showFolderShareModal(folderName, key, fileCount) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal">
+    <h3>文件夹分享信息</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">对方在首页输入该密钥后，可以查看“\${esc(folderName)}”的目录结构并按需下载其中的文件。</p>
+    <div class="form-group"><label>文件夹</label><div class="share-info">\${esc(folderName)}（\${fileCount} 个文件）</div></div>
+    <div class="form-group"><label>分享密钥</label><div class="share-info" style="font-size:20px;font-weight:700;letter-spacing:3px">\${esc(key)}</div></div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="navigator.clipboard.writeText('\${key}');toast('密钥已复制')">复制密钥</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+}
+
+async function deleteFolder(encodedFolder) {
+  const ids = getFolderIds(encodedFolder);
+  if (!ids.length) return;
+  if (!confirm(\`确认删除该文件夹中的 \${ids.length} 个文件？\`)) return;
+  const r = await api('/files/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+  const d = await r.json();
+  toast(\`已删除 \${d.deleted} 个文件\`);
+  loadFiles();
+}
+window.deleteFolder = deleteFolder;
+
+function getShareDisplayPath(file, folderName) {
+  if (!file.relative_path) return file.filename;
+  const prefix = (folderName || '') + '/';
+  return file.relative_path.startsWith(prefix) ? file.relative_path.slice(prefix.length) : file.relative_path;
+}
 
 async function batchDelete() {
   const ids = getSelectedIds();
@@ -545,6 +951,42 @@ async function saveLimits(e) {
   toast('设置已保存');
 }
 window.saveLimits = saveLimits;
+
+function showPasswordModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal">
+    <h3>修改密码</h3>
+    <div class="form-group"><label>当前密码</label><input id="cpOld" type="password" autocomplete="current-password"></div>
+    <div class="form-group"><label>新密码</label><input id="cpNew" type="password" autocomplete="new-password"></div>
+    <div class="form-group"><label>确认新密码</label><input id="cpConfirm" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')submitPasswordChange()"></div>
+    <div class="actions">
+      <button class="btn btn-sm" onclick="submitPasswordChange()">确认修改</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+}
+window.showPasswordModal = showPasswordModal;
+
+async function submitPasswordChange() {
+  const currentPassword = document.getElementById('cpOld')?.value || '';
+  const newPassword = document.getElementById('cpNew')?.value || '';
+  const confirmPassword = document.getElementById('cpConfirm')?.value || '';
+  if (!currentPassword || !newPassword) { toast('请填写完整密码信息'); return; }
+  if (newPassword !== confirmPassword) { toast('两次输入的新密码不一致'); return; }
+  const r = await api('/auth/password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  document.querySelector('.modal-overlay')?.remove();
+  toast('密码已修改，请重新登录');
+  renderLogin();
+}
+window.submitPasswordChange = submitPasswordChange;
 
 // --- Init ---
 checkAuth();

@@ -11,4 +11,19 @@ export async function migrate(db) {
   for (const sql of SCHEMA) {
     await db.prepare(sql).run();
   }
+
+  await ensureColumn(db, 'files', 'folder_name', 'TEXT');
+  await ensureColumn(db, 'files', 'relative_path', 'TEXT');
+  await ensureColumn(db, 'files', 'folder_id', 'TEXT');
+  await ensureColumn(db, 'files', 'folder_share_key', 'TEXT');
+}
+
+async function ensureColumn(db, table, column, type) {
+  try {
+    await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+  } catch (error) {
+    if (!String(error?.message || error).includes('duplicate column name')) {
+      throw error;
+    }
+  }
 }

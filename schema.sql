@@ -13,6 +13,10 @@ CREATE TABLE IF NOT EXISTS files (
   size INTEGER NOT NULL,
   content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
   r2_key TEXT NOT NULL,
+  folder_name TEXT,
+  relative_path TEXT,
+  folder_id TEXT,
+  folder_share_key TEXT,
   share_key TEXT, -- nullable, set when shared
   uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT -- nullable, optional expiration

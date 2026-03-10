@@ -154,7 +154,9 @@ npm test
 
 ## 忘记密码 / 重置密码
 
-系统为单用户，密码以 SHA-256 哈希存储在 D1 数据库中。忘记密码后无法在页面找回，需通过以下步骤手动重置。
+如果仍然可以登录，建议优先使用页面右上角的“修改密码”功能在线更新密码。
+
+系统为单用户，密码以 SHA-256 哈希存储在 D1 数据库中。忘记密码且无法登录时，需通过以下步骤手动重置。
 
 ### 第一步：计算新密码的 SHA-256 哈希
 
@@ -167,7 +169,7 @@ node -e "const c=require('crypto');console.log(c.createHash('sha256').update('ne
 输出示例：
 
 ```
-74c04d93b7b37c08884a8c5f66b9ab70d5551cf77c315f00dfe7e92e5f5cbfa5
+089542505d659cecbb988bb5ccff5bccf85be2dfa8c221359079aee2531298bb
 ```
 
 ### 第二步：将新哈希写入 D1
@@ -188,7 +190,7 @@ wrangler d1 execute cloudflare-share-db --remote --command \
 3. 执行以下 SQL（替换哈希值）：
 
 ```sql
-UPDATE user SET password_hash = '74c04d93b7b37c08884a8c5f66b9ab70d5551cf77c315f00dfe7e92e5f5cbfa5' WHERE id = 1;
+UPDATE user SET password_hash = '089542505d659cecbb988bb5ccff5bccf85be2dfa8c221359079aee2531298bb' WHERE id = 1;
 ```
 
 ---

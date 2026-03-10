@@ -109,6 +109,7 @@ describe('CloudflareShare', () => {
     const files = await listRes.json();
     expect(files.length).toBe(1);
     expect(files[0].filename).toBe('test.txt');
+    expect(files[0].folder_name).toBeNull();
 
     // Authenticated download
     const dlRes = await authCall(`/api/files/${fileId}/download`, cookie);
@@ -155,6 +156,107 @@ describe('CloudflareShare', () => {
     expect(delRes.status).toBe(200);
     const afterDel = await authCall('/api/files', cookie);
     expect((await afterDel.json()).length).toBe(0);
+  });
+
+  it('stores uploaded folder metadata and allows password changes', async () => {
+    const cookie = await setupAndLogin();
+
+    const fd = new FormData();
+    fd.append('file', new Blob(['nested content'], { type: 'text/plain' }), 'note.txt');
+    fd.append('folderName', 'docs');
+    fd.append('relativePath', 'docs/note.txt');
+    fd.append('folderId', 'folder-docs-1');
+
+    const uploadRes = await authCall('/api/files/upload', cookie, { method: 'POST', body: fd });
+    expect(uploadRes.status).toBe(200);
+
+    const listRes = await authCall('/api/files', cookie);
+    const files = await listRes.json();
+    expect(files).toHaveLength(1);
+    expect(files[0].folder_name).toBe('docs');
+    expect(files[0].relative_path).toBe('docs/note.txt');
+    expect(files[0].folder_id).toBe('folder-docs-1');
+
+    const badChange = await authCall('/api/auth/password', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ currentPassword: 'wrong', newPassword: 'newpass123' }),
+    });
+    expect(badChange.status).toBe(401);
+
+    const changeRes = await authCall('/api/auth/password', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ currentPassword: 'password123', newPassword: 'newpass123' }),
+    });
+    expect(changeRes.status).toBe(200);
+    expect(changeRes.headers.get('Set-Cookie')).toContain('Max-Age=0');
+
+    const oldLogin = await call('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'password123' }),
+    });
+    expect(oldLogin.status).toBe(401);
+
+    const newLogin = await call('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'newpass123' }),
+    });
+    expect(newLogin.status).toBe(200);
+  });
+
+  it('shares a folder with one key and allows per-file public downloads', async () => {
+    const cookie = await setupAndLogin();
+
+    const fileA = new FormData();
+    fileA.append('file', new Blob(['alpha'], { type: 'text/plain' }), 'a.txt');
+    fileA.append('folderName', 'bundle');
+    fileA.append('relativePath', 'bundle/a.txt');
+    fileA.append('folderId', 'bundle-1');
+    await authCall('/api/files/upload', cookie, { method: 'POST', body: fileA });
+
+    const fileB = new FormData();
+    fileB.append('file', new Blob(['beta'], { type: 'text/plain' }), 'b.txt');
+    fileB.append('folderName', 'bundle');
+    fileB.append('relativePath', 'bundle/sub/b.txt');
+    fileB.append('folderId', 'bundle-1');
+    await authCall('/api/files/upload', cookie, { method: 'POST', body: fileB });
+
+    const shareRes = await authCall('/api/folders/share', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ folderId: 'bundle-1', folderName: 'bundle' }),
+    });
+    expect(shareRes.status).toBe(200);
+    const shareData = await shareRes.json();
+    expect(shareData.shareKey).toBeTruthy();
+    expect(shareData.fileCount).toBe(2);
+
+    const lookupRes = await call(`/api/share?key=${shareData.shareKey}`);
+    expect(lookupRes.status).toBe(200);
+    const lookupData = await lookupRes.json();
+    expect(lookupData.type).toBe('folder');
+    expect(lookupData.folderName).toBe('bundle');
+    expect(lookupData.files).toHaveLength(2);
+
+    const targetFile = lookupData.files.find(file => file.relative_path === 'bundle/sub/b.txt');
+    expect(targetFile).toBeTruthy();
+
+    const dlRes = await call(`/api/share/download?key=${shareData.shareKey}&id=${targetFile.id}`);
+    expect(dlRes.status).toBe(200);
+    expect(await dlRes.text()).toBe('beta');
+
+    const unshareRes = await authCall('/api/folders/unshare', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ folderId: 'bundle-1', folderName: 'bundle' }),
+    });
+    expect(unshareRes.status).toBe(200);
+
+    const afterUnshare = await call(`/api/share?key=${shareData.shareKey}`);
+    expect(afterUnshare.status).toBe(404);
   });
 
   it('usage stats and limits management', async () => {

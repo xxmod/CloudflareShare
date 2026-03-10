@@ -59,6 +59,30 @@ export async function handleLogout(request, env) {
   });
 }
 
+export async function handleChangePassword(request, env) {
+  const { currentPassword, newPassword } = await request.json();
+  if (!currentPassword || !newPassword) return error('Current and new password required');
+  if (newPassword.length < 6) return error('Password must be at least 6 characters');
+
+  const user = await env.DB.prepare('SELECT id, password_hash FROM user LIMIT 1').first();
+  if (!user) return error('User not found', 404);
+
+  const currentHash = await hashPassword(currentPassword);
+  if (currentHash !== user.password_hash) return error('Current password is incorrect', 401);
+
+  const newHash = await hashPassword(newPassword);
+  await env.DB.prepare('UPDATE user SET password_hash = ? WHERE id = ?').bind(newHash, user.id).run();
+  await env.DB.prepare('DELETE FROM sessions').run();
+
+  return new Response(JSON.stringify({ ok: true, relogin: true }), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+      'Set-Cookie': 'session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
+    },
+  });
+}
+
 export async function handleSetup(request, env) {
   // Only allow setup if no user exists
   const existing = await env.DB.prepare('SELECT COUNT(*) as cnt FROM user').first();
