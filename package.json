@@ -1,0 +1,21 @@
+{
+  "name": "cloudflareshare",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute cloudflare-share-db --local --file=./schema.sql"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.20",
+    "vitest": "3.2.x",
+    "wrangler": "^4.71.0"
+  }
+}
