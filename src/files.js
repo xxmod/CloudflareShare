@@ -114,6 +114,49 @@ export async function handleDownload(fileId, env, isPublic = false, key = null) 
   return new Response(object.body, { headers });
 }
 
+// --- Batch operations ---
+
+export async function handleBatchDelete(ids, env) {
+  if (!Array.isArray(ids) || ids.length === 0) return error('No files specified');
+  let deleted = 0;
+  for (const id of ids) {
+    const file = await env.DB.prepare('SELECT * FROM files WHERE id = ?').bind(id).first();
+    if (!file) continue;
+    await env.BUCKET.delete(file.r2_key);
+    await env.DB.prepare('DELETE FROM files WHERE id = ?').bind(id).run();
+    await trackUsage(env, 'r2_class_a');
+    await trackUsage(env, 'd1_write');
+    deleted++;
+  }
+  await updateStorageUsage(env);
+  return json({ deleted });
+}
+
+export async function handleBatchShare(ids, env) {
+  if (!Array.isArray(ids) || ids.length === 0) return error('No files specified');
+  let shared = 0;
+  for (const id of ids) {
+    const file = await env.DB.prepare('SELECT id FROM files WHERE id = ?').bind(id).first();
+    if (!file) continue;
+    const shareKey = generateToken().substring(0, 16);
+    await env.DB.prepare('UPDATE files SET share_key = ? WHERE id = ?').bind(shareKey, id).run();
+    await trackUsage(env, 'd1_write');
+    shared++;
+  }
+  return json({ shared });
+}
+
+export async function handleBatchUnshare(ids, env) {
+  if (!Array.isArray(ids) || ids.length === 0) return error('No files specified');
+  let unshared = 0;
+  for (const id of ids) {
+    await env.DB.prepare('UPDATE files SET share_key = NULL WHERE id = ?').bind(id).run();
+    await trackUsage(env, 'd1_write');
+    unshared++;
+  }
+  return json({ unshared });
+}
+
 // --- Public key-based access ---
 
 export async function handleGetByShareKey(key, env) {

@@ -273,10 +273,20 @@ function loadTab() {
 async function loadFiles() {
   const c = document.getElementById('content');
   c.innerHTML = \`
-  <div class="upload-zone" id="dropzone" onclick="document.getElementById('fileInput').click()">
-    <p style="font-size:16px;font-weight:700;margin-bottom:4px">点击或拖拽上传文件</p>
-    <p style="font-size:13px;color:#666">支持任意文件类型</p>
-    <input type="file" id="fileInput" style="display:none" multiple onchange="uploadFiles(this.files)">
+  <div class="upload-zone" id="dropzone" style="cursor:default">
+    <p style="font-size:15px;font-weight:700;margin-bottom:4px">拖拽文件到此处上传</p>
+    <p style="font-size:12px;color:#666;margin-bottom:12px">或使用按钮选择文件 / 文件夹</p>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <label class="btn btn-sm" style="cursor:pointer">选择文件<input type="file" id="fileInput" style="display:none" multiple onchange="uploadFiles(this.files)"></label>
+      <label class="btn btn-sm btn-outline" style="cursor:pointer">上传文件夹<input type="file" id="folderInput" style="display:none" webkitdirectory onchange="uploadFiles(this.files)"></label>
+    </div>
+  </div>
+  <div id="batchBar" style="display:none;margin-bottom:10px;padding:10px 14px;border:2px solid #000;align-items:center;gap:8px;flex-wrap:wrap">
+    <span id="batchCount" style="font-size:13px;font-weight:700;margin-right:4px"></span>
+    <button class="btn btn-sm btn-outline" onclick="batchShare()">批量分享</button>
+    <button class="btn btn-sm btn-outline" onclick="batchUnshare()">批量取消分享</button>
+    <button class="btn btn-sm btn-danger" onclick="batchDelete()">批量删除</button>
+    <button class="btn btn-sm" style="margin-left:auto" onclick="clearSelect()">取消全选</button>
   </div>
   <div id="fileList"><div class="empty">加载中...</div></div>\`;
 
@@ -291,8 +301,12 @@ async function loadFiles() {
   if (!files.length) { fl.innerHTML = '<div class="empty">暂无文件</div>'; return; }
 
   fl.innerHTML = \`<table>
-    <thead><tr><th>文件名</th><th>大小</th><th>上传时间</th><th>分享状态</th><th>操作</th></tr></thead>
+    <thead><tr>
+      <th style="width:32px"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)"></th>
+      <th>文件名</th><th>大小</th><th>上传时间</th><th>分享状态</th><th>操作</th>
+    </tr></thead>
     <tbody>\${files.map(f => \`<tr>
+      <td><input type="checkbox" class="file-check" data-id="\${f.id}" onchange="updateBatch()"></td>
       <td>\${esc(f.filename)}</td>
       <td>\${formatSize(f.size)}</td>
       <td>\${f.uploaded_at}</td>
@@ -300,7 +314,7 @@ async function loadFiles() {
       <td class="actions">
         <button class="btn btn-sm" onclick="downloadFile('\${f.id}')">下载</button>
         \${f.share_key
-          ? \`<button class="btn btn-sm btn-outline" onclick="showShareInfo('\${f.id}','\${f.share_key}')">链接</button>
+          ? \`<button class="btn btn-sm btn-outline" onclick="showShareInfo('\${f.id}','\${f.share_key}')">分享信息</button>
              <button class="btn btn-sm btn-danger" onclick="unshareFile('\${f.id}')">取消分享</button>\`
           : \`<button class="btn btn-sm btn-outline" onclick="shareFile('\${f.id}')">分享</button>\`}
         <button class="btn btn-sm btn-danger" onclick="deleteFile('\${f.id}')">删除</button>
@@ -316,16 +330,22 @@ function esc(s) {
 }
 
 async function uploadFiles(fileList) {
-  for (const file of fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+  if (files.length > 1) toast(\`开始上传 \${files.length} 个文件...\`);
+  let done = 0, failed = 0;
+  for (const file of files) {
+    const name = file.webkitRelativePath || file.name;
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', file, name);
     try {
       const r = await fetch(API + '/files/upload', { method: 'POST', body: fd });
       const d = await r.json();
-      if (d.error) { toast('上传失败: ' + d.error); continue; }
-      toast('已上传: ' + file.name);
-    } catch(e) { toast('上传失败'); }
+      if (d.error) { failed++; continue; }
+      done++;
+    } catch(e) { failed++; }
   }
+  toast(files.length === 1 ? (done ? \`已上传：\${files[0].name}\` : '上传失败') : \`上传完成：\${done} 成功，\${failed} 失败\`);
   loadFiles();
 }
 window.uploadFiles = uploadFiles;
@@ -346,16 +366,21 @@ async function shareFile(id) {
 window.shareFile = shareFile;
 
 function showShareInfo(id, key) {
+  const shareLink = location.origin + '/s/' + id + '?key=' + encodeURIComponent(key);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = \`<div class="modal">
-    <h3>分享密钥</h3>
-    <p style="font-size:13px;color:#666;margin-bottom:16px">将以下密钥分享给他人，对方在首页输入密钥即可下载文件。</p>
+    <h3>分享信息</h3>
     <div class="form-group"><label>密钥</label>
-    <div class="share-info" style="font-size:18px;font-weight:700;letter-spacing:2px">\${esc(key)}</div></div>
-    <div class="actions">
-      <button class="btn btn-sm" onclick="navigator.clipboard.writeText('\${key}');toast('密钥已复制')">复制密钥</button>
+    <div class="share-info" style="font-size:20px;font-weight:700;letter-spacing:3px">\${esc(key)}</div>
+    <button class="btn btn-sm" style="margin-top:8px" onclick="navigator.clipboard.writeText('\${key}');toast('密钥已复制')">复制密钥</button>
+    </div>
+    <div class="form-group"><label>分享链接（含密钥）</label>
+    <div class="share-info">\${esc(shareLink)}</div>
+    <button class="btn btn-sm" style="margin-top:8px" onclick="navigator.clipboard.writeText('\${shareLink}');toast('链接已复制')">复制链接</button>
+    </div>
+    <div class="actions" style="margin-top:4px">
       <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">关闭</button>
     </div>
   </div>\`;
@@ -378,6 +403,74 @@ async function deleteFile(id) {
   loadFiles();
 }
 window.deleteFile = deleteFile;
+
+// --- Batch operations ---
+function getSelectedIds() {
+  return [...document.querySelectorAll('.file-check:checked')].map(c => c.dataset.id);
+}
+
+function updateBatch() {
+  const ids = getSelectedIds();
+  const bar = document.getElementById('batchBar');
+  if (!bar) return;
+  bar.style.display = ids.length > 0 ? 'flex' : 'none';
+  const ct = document.getElementById('batchCount');
+  if (ct) ct.textContent = ids.length + ' 个文件已选';
+  const sa = document.getElementById('selectAll');
+  if (sa) {
+    const all = document.querySelectorAll('.file-check');
+    sa.indeterminate = ids.length > 0 && ids.length < all.length;
+    sa.checked = all.length > 0 && ids.length === all.length;
+  }
+}
+window.updateBatch = updateBatch;
+
+function toggleSelectAll(checked) {
+  document.querySelectorAll('.file-check').forEach(c => { c.checked = checked; });
+  updateBatch();
+}
+window.toggleSelectAll = toggleSelectAll;
+
+function clearSelect() {
+  const sa = document.getElementById('selectAll');
+  if (sa) sa.checked = false;
+  document.querySelectorAll('.file-check').forEach(c => { c.checked = false; });
+  updateBatch();
+}
+window.clearSelect = clearSelect;
+
+async function batchDelete() {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  if (!confirm(\`确认删除 \${ids.length} 个文件？\`)) return;
+  const r = await api('/files/batch-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+  const d = await r.json();
+  toast(\`已删除 \${d.deleted} 个文件\`);
+  loadFiles();
+}
+window.batchDelete = batchDelete;
+
+async function batchShare() {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  const r = await api('/files/batch-share', { method: 'POST', body: JSON.stringify({ ids }) });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  toast(\`已为 \${d.shared} 个文件创建分享\`);
+  loadFiles();
+}
+window.batchShare = batchShare;
+
+async function batchUnshare() {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  if (!confirm(\`确认取消 \${ids.length} 个文件的分享？\`)) return;
+  const r = await api('/files/batch-unshare', { method: 'POST', body: JSON.stringify({ ids }) });
+  const d = await r.json();
+  toast(\`已取消 \${d.unshared} 个文件的分享\`);
+  loadFiles();
+}
+window.batchUnshare = batchUnshare;
 
 // --- Usage ---
 async function loadUsage() {
