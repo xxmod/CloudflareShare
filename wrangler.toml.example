@@ -5,8 +5,8 @@ compatibility_date = "2024-12-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "cloudflare-share-db"
-database_id = "local-dev-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 [[r2_buckets]]
-binding = "BUCKET"
-bucket_name = "cloudflare-share-files"
+bucket_name = "cloudflare-share-bucket"
+binding = "cloudflare_share_bucket"
