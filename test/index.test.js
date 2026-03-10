@@ -122,26 +122,29 @@ describe('CloudflareShare', () => {
     const shareKey = shareData.shareKey;
     expect(shareKey).toBeTruthy();
 
-    // Public download with key
+    // Public download with key (via /api/files/:id/download?key=)
     const pubDlRes = await call(`/api/files/${fileId}/download?key=${shareKey}`);
     expect(pubDlRes.status).toBe(200);
     expect(await pubDlRes.text()).toBe('hello world');
 
-    // Reject wrong key
+    // Reject wrong key via old route
     const badKeyRes = await call(`/api/files/${fileId}/download?key=wrongkey`);
     expect(badKeyRes.status).toBe(403);
 
-    // Share page
-    const pageRes = await call(`/s/${fileId}?key=${shareKey}`);
-    expect(pageRes.status).toBe(200);
-    const pageHtml = await pageRes.text();
-    expect(pageHtml).toContain('test.txt');
-    expect(pageHtml).toContain('下载文件');
+    // Key lookup via /api/share?key= (new public route)
+    const infoRes = await call(`/api/share?key=${shareKey}`);
+    expect(infoRes.status).toBe(200);
+    const info = await infoRes.json();
+    expect(info.filename).toBe('test.txt');
 
-    // Key input page
-    const keyPageRes = await call(`/s/${fileId}`);
-    expect(keyPageRes.status).toBe(200);
-    expect(await keyPageRes.text()).toContain('输入分享密钥');
+    // Reject invalid key via /api/share
+    const badInfoRes = await call('/api/share?key=badkey');
+    expect(badInfoRes.status).toBe(404);
+
+    // Download via /api/share/download?key=
+    const keyDlRes = await call(`/api/share/download?key=${shareKey}`);
+    expect(keyDlRes.status).toBe(200);
+    expect(await keyDlRes.text()).toBe('hello world');
 
     // Unshare
     const unshareRes = await authCall(`/api/files/${fileId}/unshare`, cookie, { method: 'POST' });

@@ -181,13 +181,47 @@ window.doSetup = doSetup;
 
 function renderLogin() {
   app.innerHTML = \`
-  <div class="login-card">
-    <h2>CloudflareShare</h2>
-    <div class="form-group"><label>用户名</label><input id="lu" type="text" placeholder="用户名"></div>
-    <div class="form-group"><label>密码</label><input id="lp" type="password" placeholder="密码" onkeydown="if(event.key==='Enter')doLogin()"></div>
-    <button class="btn" style="width:100%" onclick="doLogin()">登录</button>
+  <div style="max-width:800px;margin:60px auto;padding:20px">
+    <h1 style="text-align:center;margin-bottom:8px;font-size:26px;letter-spacing:-1px">CloudflareShare</h1>
+    <p style="text-align:center;color:#999;font-size:13px;margin-bottom:32px">文件存储与分享</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+      <div class="card">
+        <h3 style="margin-bottom:16px">管理员登录</h3>
+        <div class="form-group"><label>用户名</label><input id="lu" type="text" placeholder="用户名" autocomplete="username"></div>
+        <div class="form-group"><label>密码</label><input id="lp" type="password" placeholder="密码" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+        <button class="btn" style="width:100%" onclick="doLogin()">登录</button>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:8px">文件下载</h3>
+        <p style="font-size:13px;color:#666;margin-bottom:16px">输入分享密钥以查找并下载文件</p>
+        <div class="form-group"><label>分享密钥</label><input id="shareKeyInput" type="text" placeholder="输入密钥..." onkeydown="if(event.key==='Enter')lookupKey()"></div>
+        <button class="btn btn-outline" style="width:100%" onclick="lookupKey()">查找文件</button>
+        <div id="keyResult" style="margin-top:12px"></div>
+      </div>
+    </div>
   </div>\`;
 }
+
+async function lookupKey() {
+  const key = document.getElementById('shareKeyInput').value.trim();
+  if (!key) { toast('请输入密钥'); return; }
+  const r = document.getElementById('keyResult');
+  r.innerHTML = '<div style="padding:8px;font-size:13px;color:#999">查找中...</div>';
+  try {
+    const res = await fetch('/api/share?key=' + encodeURIComponent(key));
+    const data = await res.json();
+    if (data.error) {
+      r.innerHTML = \`<div style="padding:12px;border:1px solid #ddd;color:#666;font-size:13px">\${esc(data.error)}</div>\`;
+      return;
+    }
+    r.innerHTML = \`<div style="padding:12px;border:2px solid #000">
+      <div style="font-weight:700;font-size:14px;margin-bottom:4px">\${esc(data.filename)}</div>
+      <div style="font-size:12px;color:#666;margin-bottom:12px">\${formatSize(data.size)}</div>
+      <a href="/api/share/download?key=\${encodeURIComponent(key)}" class="btn btn-sm" style="display:inline-block">下载文件</a>
+    </div>\`;
+  } catch(e) { r.innerHTML = '<div style="padding:12px;border:1px solid #ddd;color:#666;font-size:13px">查找失败</div>'; }
+}
+window.lookupKey = lookupKey;
 
 async function doLogin() {
   const u = document.getElementById('lu').value;
@@ -312,18 +346,16 @@ async function shareFile(id) {
 window.shareFile = shareFile;
 
 function showShareInfo(id, key) {
-  const url = location.origin + '/s/' + id + '?key=' + key;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = \`<div class="modal">
-    <h3>分享链接</h3>
-    <div class="form-group"><label>完整链接 (含密钥)</label>
-    <div class="share-info" id="shareUrl">\${esc(url)}</div></div>
+    <h3>分享密钥</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">将以下密钥分享给他人，对方在首页输入密钥即可下载文件。</p>
     <div class="form-group"><label>密钥</label>
-    <div class="share-info">\${esc(key)}</div></div>
+    <div class="share-info" style="font-size:18px;font-weight:700;letter-spacing:2px">\${esc(key)}</div></div>
     <div class="actions">
-      <button class="btn btn-sm" onclick="navigator.clipboard.writeText('\${url}');toast('已复制')">复制链接</button>
+      <button class="btn btn-sm" onclick="navigator.clipboard.writeText('\${key}');toast('密钥已复制')">复制密钥</button>
       <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">关闭</button>
     </div>
   </div>\`;

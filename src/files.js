@@ -114,6 +114,39 @@ export async function handleDownload(fileId, env, isPublic = false, key = null) 
   return new Response(object.body, { headers });
 }
 
+// --- Public key-based access ---
+
+export async function handleGetByShareKey(key, env) {
+  if (!key) return error('Key required');
+  const d1Check = await checkLimits(env, 'd1_read');
+  if (!d1Check.allowed) return error(d1Check.reason, 429);
+  const file = await env.DB.prepare(
+    'SELECT id, filename, size, content_type FROM files WHERE share_key = ?'
+  ).bind(key).first();
+  if (!file) return error('Invalid key', 404);
+  await trackUsage(env, 'd1_read');
+  return json(file);
+}
+
+export async function handleDownloadByShareKey(key, env) {
+  if (!key) return error('Key required');
+  const d1Check = await checkLimits(env, 'd1_read');
+  if (!d1Check.allowed) return error(d1Check.reason, 429);
+  const file = await env.DB.prepare('SELECT * FROM files WHERE share_key = ?').bind(key).first();
+  if (!file) return error('Invalid key', 404);
+  const r2Check = await checkLimits(env, 'r2_class_b');
+  if (!r2Check.allowed) return error(r2Check.reason, 429);
+  const object = await env.BUCKET.get(file.r2_key);
+  if (!object) return error('File not found in storage', 404);
+  await trackUsage(env, 'd1_read');
+  await trackUsage(env, 'r2_class_b');
+  const headers = new Headers();
+  headers.set('Content-Type', file.content_type);
+  headers.set('Content-Disposition', `attachment; filename="${encodeURIComponent(file.filename)}"`);
+  headers.set('Content-Length', file.size.toString());
+  return new Response(object.body, { headers });
+}
+
 export async function handlePublicView(fileId, env, key) {
   const file = await env.DB.prepare('SELECT id, filename, size, content_type FROM files WHERE id = ? AND share_key = ?').bind(fileId, key).first();
   if (!file) return error('File not found or invalid key', 404);
