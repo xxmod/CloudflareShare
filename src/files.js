@@ -1,6 +1,87 @@
 import { json, error, generateUUID, generateToken } from './utils.js';
 import { trackUsage, checkLimits, updateStorageUsage } from './usage.js';
 
+const DIRECT_UPLOAD_EXPIRES_SECONDS = 900;
+
+export async function handleDirectUploadInit(request, env) {
+  const config = getDirectUploadConfig(env);
+  if (!config) return error('Direct upload is not configured', 503);
+
+  const { filename, size, contentType, folderName, relativePath, folderId } = await request.json();
+  if (!filename || typeof filename !== 'string') return error('Filename is required');
+
+  const normalizedRelativePath = normalizeRelativePath(relativePath);
+  const normalizedFolderName = normalizeFolderName(folderName);
+  const normalizedFolderId = normalizeFolderId(folderId);
+  const storedName = normalizedRelativePath ? normalizedRelativePath.split('/').pop() : sanitizeFilename(filename);
+  const numericSize = Number.parseInt(size, 10);
+  const safeSize = Number.isFinite(numericSize) && numericSize >= 0 ? numericSize : 0;
+  const safeContentType = typeof contentType === 'string' && contentType.trim() ? contentType.trim() : 'application/octet-stream';
+
+  const id = generateUUID();
+  const r2Key = `files/${id}/${normalizedRelativePath || storedName}`;
+  const uploadUrl = await createPresignedPutUrl({
+    ...config,
+    key: r2Key,
+    expiresIn: DIRECT_UPLOAD_EXPIRES_SECONDS,
+  });
+
+  return json({
+    id,
+    uploadUrl,
+    expiresIn: DIRECT_UPLOAD_EXPIRES_SECONDS,
+    r2Key,
+    filename: storedName,
+    size: safeSize,
+    contentType: safeContentType,
+    folderName: normalizedFolderName,
+    relativePath: normalizedRelativePath,
+    folderId: normalizedFolderId,
+  });
+}
+
+export async function handleDirectUploadComplete(request, env) {
+  const { id, r2Key, filename, size, contentType, folderName, relativePath, folderId } = await request.json();
+  if (!id || !r2Key || !filename) return error('Incomplete upload metadata');
+
+  const existing = await env.DB.prepare('SELECT id FROM files WHERE id = ?').bind(id).first();
+  if (existing) return json({ ok: true, id, filename, size, folderName, relativePath, folderId });
+
+  const object = await env.BUCKET.head(r2Key);
+  if (!object) return error('Uploaded object not found', 404);
+
+  const numericSize = Number.parseInt(size, 10);
+  const safeSize = Number.isFinite(numericSize) && numericSize >= 0 ? numericSize : object.size;
+  if (object.size !== safeSize) return error('Uploaded object size mismatch', 409);
+
+  const safeContentType = typeof contentType === 'string' && contentType.trim()
+    ? contentType.trim()
+    : object.httpMetadata?.contentType || 'application/octet-stream';
+  const normalizedRelativePath = normalizeRelativePath(relativePath);
+  const normalizedFolderName = normalizeFolderName(folderName);
+  const normalizedFolderId = normalizeFolderId(folderId);
+  const storedName = sanitizeFilename(filename);
+
+  await env.DB.prepare(
+    'INSERT INTO files (id, filename, size, content_type, r2_key, folder_name, relative_path, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(
+    id,
+    storedName,
+    safeSize,
+    safeContentType,
+    r2Key,
+    normalizedFolderName,
+    normalizedRelativePath,
+    normalizedFolderId,
+  ).run();
+
+  await trackUsage(env, 'r2_class_a');
+  await trackUsage(env, 'd1_write');
+  await updateStorageUsage(env);
+
+  return json({ ok: true, id, filename: storedName, size: safeSize, folderName: normalizedFolderName, relativePath: normalizedRelativePath, folderId: normalizedFolderId });
+}
+
 export async function handleUpload(request, env) {
   const abortSignal = request.signal;
   let requestAborted = abortSignal?.aborted === true;
@@ -15,14 +96,10 @@ export async function handleUpload(request, env) {
   const d1Check = await checkLimits(env, 'd1_write');
   if (!d1Check.allowed) return error(d1Check.reason, 429);
 
-  const formData = await request.formData();
-  const file = formData.get('file');
-  if (!file) return error('No file provided');
+  const upload = await parseUploadRequest(request);
+  if (!upload) return error('No file provided');
 
-  const relativePath = normalizeRelativePath(formData.get('relativePath'));
-  const folderName = normalizeFolderName(formData.get('folderName'));
-  const folderId = normalizeFolderId(formData.get('folderId'));
-  const storedName = relativePath ? relativePath.split('/').pop() : file.name;
+  const { body, size, contentType, relativePath, folderName, folderId, storedName } = upload;
 
   // Check storage limit
   const storageCheck = await checkLimits(env, 'r2_storage');
@@ -34,8 +111,8 @@ export async function handleUpload(request, env) {
   try {
     if (requestAborted) return error('Upload canceled', 499);
 
-    await env.BUCKET.put(r2Key, file.stream(), {
-      httpMetadata: { contentType: file.type || 'application/octet-stream' },
+    await env.BUCKET.put(r2Key, body, {
+      httpMetadata: { contentType },
       customMetadata: {
         originalName: storedName,
         relativePath: relativePath || storedName,
@@ -53,8 +130,8 @@ export async function handleUpload(request, env) {
     ).bind(
       id,
       storedName,
-      file.size,
-      file.type || 'application/octet-stream',
+      size,
+      contentType,
       r2Key,
       folderName,
       relativePath,
@@ -71,7 +148,7 @@ export async function handleUpload(request, env) {
     await trackUsage(env, 'd1_write');
     await updateStorageUsage(env);
 
-    return json({ id, filename: storedName, size: file.size, folderName, relativePath, folderId });
+    return json({ id, filename: storedName, size, folderName, relativePath, folderId });
   } finally {
     abortSignal?.removeEventListener('abort', onAbort);
   }
@@ -294,6 +371,58 @@ function normalizeFolderId(value) {
   return trimmed || null;
 }
 
+async function parseUploadRequest(request) {
+  const transport = request.headers.get('X-Upload-Transport');
+  if (transport === 'raw') {
+    const filename = decodeUploadHeader(request.headers.get('X-File-Name'));
+    if (!filename || !request.body) return null;
+
+    const relativePath = normalizeRelativePath(decodeUploadHeader(request.headers.get('X-Relative-Path')));
+    const folderName = normalizeFolderName(decodeUploadHeader(request.headers.get('X-Folder-Name')));
+    const folderId = normalizeFolderId(decodeUploadHeader(request.headers.get('X-Folder-Id')));
+    const storedName = relativePath ? relativePath.split('/').pop() : filename;
+    const declaredSize = Number.parseInt(request.headers.get('X-File-Size') || '0', 10);
+
+    return {
+      body: request.body,
+      size: Number.isFinite(declaredSize) && declaredSize >= 0 ? declaredSize : 0,
+      contentType: request.headers.get('Content-Type') || 'application/octet-stream',
+      relativePath,
+      folderName,
+      folderId,
+      storedName,
+    };
+  }
+
+  const formData = await request.formData();
+  const file = formData.get('file');
+  if (!file) return null;
+
+  const relativePath = normalizeRelativePath(formData.get('relativePath'));
+  const folderName = normalizeFolderName(formData.get('folderName'));
+  const folderId = normalizeFolderId(formData.get('folderId'));
+  const storedName = relativePath ? relativePath.split('/').pop() : file.name;
+
+  return {
+    body: file.stream(),
+    size: file.size,
+    contentType: file.type || 'application/octet-stream',
+    relativePath,
+    folderName,
+    folderId,
+    storedName,
+  };
+}
+
+function decodeUploadHeader(value) {
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 async function getFolderFiles(folder, env) {
   if (folder?.folderId) {
     const result = await env.DB.prepare(
@@ -321,4 +450,111 @@ async function updateFolderShareKey(folder, shareKey, env) {
   if (folder?.folderName) {
     await env.DB.prepare('UPDATE files SET folder_share_key = ? WHERE folder_name = ? AND folder_id IS NULL').bind(shareKey, folder.folderName).run();
   }
+}
+
+function getDirectUploadConfig(env) {
+  if (!env.R2_ACCOUNT_ID || !env.R2_BUCKET_NAME || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
+    return null;
+  }
+
+  return {
+    accountId: env.R2_ACCOUNT_ID,
+    bucketName: env.R2_BUCKET_NAME,
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+  };
+}
+
+async function createPresignedPutUrl({ accountId, bucketName, accessKeyId, secretAccessKey, key, expiresIn }) {
+  const now = new Date();
+  const amzDate = toAmzDate(now);
+  const shortDate = amzDate.slice(0, 8);
+  const host = `${bucketName}.${accountId}.r2.cloudflarestorage.com`;
+  const canonicalUri = '/' + encodeR2Key(key);
+  const credentialScope = `${shortDate}/auto/s3/aws4_request`;
+
+  const query = new URLSearchParams({
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD',
+    'X-Amz-Credential': `${accessKeyId}/${credentialScope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+    'x-id': 'PutObject',
+  });
+
+  const canonicalQuery = toCanonicalQuery(query);
+  const canonicalRequest = [
+    'PUT',
+    canonicalUri,
+    canonicalQuery,
+    `host:${host}`,
+    '',
+    'host',
+    'UNSIGNED-PAYLOAD',
+  ].join('\n');
+
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    await sha256Hex(canonicalRequest),
+  ].join('\n');
+
+  const signingKey = await getSignatureKey(secretAccessKey, shortDate, 'auto', 's3');
+  const signature = await hmacHex(signingKey, stringToSign);
+  query.set('X-Amz-Signature', signature);
+
+  return `https://${host}${canonicalUri}?${toCanonicalQuery(query)}`;
+}
+
+function sanitizeFilename(filename) {
+  return String(filename || 'file').split('/').pop().split('\\').pop() || 'file';
+}
+
+function encodeR2Key(key) {
+  return key.split('/').map(segment => encodeURIComponent(segment)).join('/');
+}
+
+function toAmzDate(date) {
+  return date.toISOString().replace(/[:-]|\.\d{3}/g, '');
+}
+
+function toCanonicalQuery(params) {
+  return [...params.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+}
+
+async function sha256Hex(value) {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return toHex(hash);
+}
+
+async function hmac(key, value) {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    typeof key === 'string' ? new TextEncoder().encode(key) : key,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  return crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(value));
+}
+
+async function hmacHex(key, value) {
+  return toHex(await hmac(key, value));
+}
+
+async function getSignatureKey(secretAccessKey, shortDate, region, service) {
+  const kDate = await hmac(`AWS4${secretAccessKey}`, shortDate);
+  const kRegion = await hmac(kDate, region);
+  const kService = await hmac(kRegion, service);
+  return hmac(kService, 'aws4_request');
+}
+
+function toHex(buffer) {
+  return Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
 }

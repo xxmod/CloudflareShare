@@ -402,16 +402,14 @@ async function uploadFiles(fileList, isFolder = false) {
   for (const file of files) {
     if (uploadCanceled) break;
     const relativePath = file.webkitRelativePath || file.name;
-    const fd = new FormData();
-    fd.append('file', file, file.name);
-    if (isFolder) {
-      fd.append('folderName', folderName);
-      fd.append('relativePath', relativePath);
-      fd.append('folderId', folderId);
-    }
 
     try {
-      const data = await uploadSingleFile(fd, loaded => {
+      const data = await uploadSingleFile(file, {
+        folderName,
+        relativePath,
+        folderId,
+        isFolder,
+      }, loaded => {
         if (uploadCanceled) return;
         setUploadState({
           active: true,
@@ -484,24 +482,72 @@ async function uploadFiles(fileList, isFolder = false) {
 }
 window.uploadFiles = uploadFiles;
 
-function uploadSingleFile(formData, onProgress) {
-  return new Promise((resolve, reject) => {
+function uploadSingleFile(file, meta, onProgress) {
+  return new Promise(async (resolve, reject) => {
+    let uploadInfo;
+    try {
+      const initRes = await api('/files/upload/direct/init', {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          size: file.size,
+          contentType: file.type || 'application/octet-stream',
+          folderName: meta?.folderName || null,
+          relativePath: meta?.relativePath || null,
+          folderId: meta?.folderId || null,
+        }),
+      });
+      uploadInfo = await initRes.json();
+      if (!initRes.ok || uploadInfo.error) {
+        reject(new Error(uploadInfo.error || 'Upload initialization failed'));
+        return;
+      }
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
     const xhr = new XMLHttpRequest();
     currentUploadXHR = xhr;
-    xhr.open('POST', API + '/files/upload');
-    xhr.responseType = 'json';
+    xhr.open('PUT', uploadInfo.uploadUrl);
     xhr.upload.onprogress = event => {
       if (uploadCanceled) { xhr.abort(); return; }
       if (event.lengthComputable) onProgress(event.loaded);
     };
-    xhr.onload = () => {
+    xhr.onload = async () => {
       currentUploadXHR = null;
       if (uploadCanceled) {
         reject(new Error('Upload canceled'));
         return;
       }
-      const data = xhr.response || JSON.parse(xhr.responseText || '{}');
-      resolve(data);
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error('Direct upload failed'));
+        return;
+      }
+
+      try {
+        const completeRes = await api('/files/upload/direct/complete', {
+          method: 'POST',
+          body: JSON.stringify({
+            id: uploadInfo.id,
+            r2Key: uploadInfo.r2Key,
+            filename: uploadInfo.filename,
+            size: uploadInfo.size,
+            contentType: uploadInfo.contentType,
+            folderName: uploadInfo.folderName,
+            relativePath: uploadInfo.relativePath,
+            folderId: uploadInfo.folderId,
+          }),
+        });
+        const data = await completeRes.json();
+        if (!completeRes.ok || data.error) {
+          reject(new Error(data.error || 'Upload finalize failed'));
+          return;
+        }
+        resolve(data);
+      } catch (error) {
+        reject(error);
+      }
     };
     xhr.onerror = () => {
       currentUploadXHR = null;
@@ -511,7 +557,7 @@ function uploadSingleFile(formData, onProgress) {
       currentUploadXHR = null;
       reject(new Error('Upload canceled'));
     };
-    xhr.send(formData);
+    xhr.send(file);
   });
 }
 

@@ -1,6 +1,6 @@
 import { json, error } from './utils.js';
 import { authenticate, requireAuth, handleLogin, handleLogout, handleSetup, handleCheckSetup, handleChangePassword } from './auth.js';
-import { handleUpload, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder } from './files.js';
+import { handleUpload, handleDirectUploadInit, handleDirectUploadComplete, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder } from './files.js';
 import { getUsageStats, updateLimits } from './usage.js';
 import { getAppHTML, getSharePageHTML } from './frontend.js';
 import { migrate } from './migrate.js';
@@ -68,6 +68,8 @@ export default {
 
         // Files
         if (path === '/api/files' && method === 'GET') return handleListFiles(env);
+        if (path === '/api/files/upload/direct/init' && method === 'POST') return handleDirectUploadInit(request, env);
+        if (path === '/api/files/upload/direct/complete' && method === 'POST') return handleDirectUploadComplete(request, env);
         if (path === '/api/files/upload' && method === 'POST') return handleUpload(request, env);
 
         const fileIdMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})$/);

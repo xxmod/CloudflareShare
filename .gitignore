@@ -5,3 +5,4 @@ dist/
 .mf/
 wrangler.toml
 package-lock.json
+r2-cors.json

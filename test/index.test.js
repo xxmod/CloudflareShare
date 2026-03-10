@@ -207,6 +207,89 @@ describe('CloudflareShare', () => {
     expect(newLogin.status).toBe(200);
   });
 
+  it('supports raw stream upload transport for large files', async () => {
+    const cookie = await setupAndLogin();
+
+    const uploadRes = await authCall('/api/files/upload', cookie, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        'X-Upload-Transport': 'raw',
+        'X-File-Name': encodeURIComponent('big.txt'),
+        'X-File-Size': '11',
+      },
+      body: 'hello world',
+    });
+
+    expect(uploadRes.status).toBe(200);
+    const uploadData = await uploadRes.json();
+    expect(uploadData.filename).toBe('big.txt');
+    expect(uploadData.size).toBe(11);
+
+    const listRes = await authCall('/api/files', cookie);
+    const files = await listRes.json();
+    expect(files).toHaveLength(1);
+    expect(files[0].filename).toBe('big.txt');
+
+    const dlRes = await authCall(`/api/files/${uploadData.id}/download`, cookie);
+    expect(dlRes.status).toBe(200);
+    expect(await dlRes.text()).toBe('hello world');
+  });
+
+  it('creates direct upload URL and completes metadata after object upload', async () => {
+    const cookie = await setupAndLogin();
+    const oldAccountId = env.R2_ACCOUNT_ID;
+    const oldBucketName = env.R2_BUCKET_NAME;
+    const oldAccessKeyId = env.R2_ACCESS_KEY_ID;
+    const oldSecret = env.R2_SECRET_ACCESS_KEY;
+
+    env.R2_ACCOUNT_ID = 'account123';
+    env.R2_BUCKET_NAME = 'bucket-demo';
+    env.R2_ACCESS_KEY_ID = 'ACCESS123';
+    env.R2_SECRET_ACCESS_KEY = 'SECRET456';
+
+    try {
+      const initRes = await authCall('/api/files/upload/direct/init', cookie, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify({
+          filename: 'direct.txt',
+          size: 12,
+          contentType: 'text/plain',
+        }),
+      });
+
+      expect(initRes.status).toBe(200);
+      const initData = await initRes.json();
+      expect(initData.uploadUrl).toContain('bucket-demo.account123.r2.cloudflarestorage.com');
+      expect(initData.r2Key).toContain(initData.id);
+
+      await env.BUCKET.put(initData.r2Key, 'hello direct', {
+        httpMetadata: { contentType: 'text/plain' },
+      });
+
+      const completeRes = await authCall('/api/files/upload/direct/complete', cookie, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify(initData),
+      });
+
+      expect(completeRes.status).toBe(200);
+      const completeData = await completeRes.json();
+      expect(completeData.ok).toBe(true);
+
+      const listRes = await authCall('/api/files', cookie);
+      const files = await listRes.json();
+      expect(files).toHaveLength(1);
+      expect(files[0].filename).toBe('direct.txt');
+    } finally {
+      env.R2_ACCOUNT_ID = oldAccountId;
+      env.R2_BUCKET_NAME = oldBucketName;
+      env.R2_ACCESS_KEY_ID = oldAccessKeyId;
+      env.R2_SECRET_ACCESS_KEY = oldSecret;
+    }
+  });
+
   it('shares a folder with one key and allows per-file public downloads', async () => {
     const cookie = await setupAndLogin();
 
