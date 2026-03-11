@@ -180,11 +180,19 @@ export async function handleDeleteFile(fileId, env) {
   return json({ ok: true });
 }
 
-export async function handleShare(fileId, env) {
+export async function handleShare(fileId, request, env) {
   const file = await env.DB.prepare('SELECT * FROM files WHERE id = ?').bind(fileId).first();
   if (!file) return error('File not found', 404);
 
-  const shareKey = generateToken().substring(0, 16);
+  let customKey = null;
+  try { customKey = (await request.json()).customKey; } catch {}
+  const shareKey = validateCustomKey(customKey) || generateToken().substring(0, 16);
+
+  const conflict = await env.DB.prepare('SELECT id FROM files WHERE share_key = ? AND id != ?').bind(shareKey, fileId).first();
+  if (conflict) return error('该密钥已被使用，请更换', 409);
+  const folderConflict = await env.DB.prepare('SELECT id FROM files WHERE folder_share_key = ? LIMIT 1').bind(shareKey).first();
+  if (folderConflict) return error('该密钥已被使用，请更换', 409);
+
   await env.DB.prepare('UPDATE files SET share_key = ? WHERE id = ?').bind(shareKey, fileId).run();
   await trackUsage(env, 'd1_write');
 
@@ -193,6 +201,14 @@ export async function handleShare(fileId, env) {
     shareUrl: `/s/${fileId}`,
     shareKeyUrl: `/s/${fileId}?key=${shareKey}`,
   });
+}
+
+function validateCustomKey(key) {
+  if (!key || typeof key !== 'string') return null;
+  const trimmed = key.trim();
+  if (trimmed.length < 2 || trimmed.length > 64) return null;
+  if (!/^[a-zA-Z0-9_\-]+$/.test(trimmed)) return null;
+  return trimmed;
 }
 
 export async function handleUnshare(fileId, env) {
@@ -248,13 +264,13 @@ export async function handleBatchDelete(ids, env) {
   return json({ deleted });
 }
 
-export async function handleBatchShare(ids, env) {
+export async function handleBatchShare(ids, customKey, env) {
   if (!Array.isArray(ids) || ids.length === 0) return error('No files specified');
   let shared = 0;
   for (const id of ids) {
     const file = await env.DB.prepare('SELECT id FROM files WHERE id = ?').bind(id).first();
     if (!file) continue;
-    const shareKey = generateToken().substring(0, 16);
+    const shareKey = validateCustomKey(customKey) || generateToken().substring(0, 16);
     await env.DB.prepare('UPDATE files SET share_key = ? WHERE id = ?').bind(shareKey, id).run();
     await trackUsage(env, 'd1_write');
     shared++;
@@ -266,7 +282,13 @@ export async function handleShareFolder(folder, env) {
   const files = await getFolderFiles(folder, env);
   if (!files.length) return error('Folder not found', 404);
 
-  const shareKey = generateToken().substring(0, 16);
+  const shareKey = validateCustomKey(folder.customKey) || generateToken().substring(0, 16);
+
+  const conflict = await env.DB.prepare('SELECT id FROM files WHERE share_key = ? LIMIT 1').bind(shareKey).first();
+  if (conflict) return error('该密钥已被使用，请更换', 409);
+  const folderConflict = await env.DB.prepare('SELECT id FROM files WHERE folder_share_key = ? AND (folder_id != ? OR folder_id IS NULL) LIMIT 1').bind(shareKey, folder.folderId || '').first();
+  if (folderConflict) return error('该密钥已被使用，请更换', 409);
+
   await updateFolderShareKey(folder, shareKey, env);
   await trackUsage(env, 'd1_write');
 
@@ -557,4 +579,127 @@ async function getSignatureKey(secretAccessKey, shortDate, region, service) {
 
 function toHex(buffer) {
   return Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// --- File/folder management ---
+
+export async function handleRenameFile(fileId, request, env) {
+  const { newName } = await request.json();
+  if (!newName || typeof newName !== 'string' || !newName.trim()) return error('新文件名不能为空');
+  const safeName = sanitizeFilename(newName.trim());
+  const file = await env.DB.prepare('SELECT * FROM files WHERE id = ?').bind(fileId).first();
+  if (!file) return error('File not found', 404);
+
+  let newRelativePath = file.relative_path;
+  if (file.relative_path) {
+    const parts = file.relative_path.split('/');
+    parts[parts.length - 1] = safeName;
+    newRelativePath = parts.join('/');
+  }
+
+  await env.DB.prepare('UPDATE files SET filename = ?, relative_path = ? WHERE id = ?')
+    .bind(safeName, newRelativePath, fileId).run();
+  await trackUsage(env, 'd1_write');
+  return json({ ok: true, filename: safeName });
+}
+
+export async function handleRenameFolder(request, env) {
+  const { folderId, folderName, newName } = await request.json();
+  if (!newName || typeof newName !== 'string' || !newName.trim()) return error('新文件夹名不能为空');
+  const safeName = newName.trim().replace(/[\/]/g, '');
+  if (!safeName) return error('文件夹名无效');
+
+  const files = await getFolderFiles({ folderId, folderName }, env);
+  if (!files.length) return error('Folder not found', 404);
+
+  const oldName = files[0].folder_name;
+
+  if (folderId) {
+    await env.DB.prepare('UPDATE files SET folder_name = ? WHERE folder_id = ?')
+      .bind(safeName, folderId).run();
+    // Update relative_path: replace old folder prefix with new name
+    const allFiles = await env.DB.prepare('SELECT id, relative_path FROM files WHERE folder_id = ?').bind(folderId).all();
+    for (const f of allFiles.results) {
+      if (f.relative_path && f.relative_path.startsWith(oldName + '/')) {
+        const newPath = safeName + f.relative_path.slice(oldName.length);
+        await env.DB.prepare('UPDATE files SET relative_path = ? WHERE id = ?').bind(newPath, f.id).run();
+      }
+    }
+  } else if (folderName) {
+    await env.DB.prepare('UPDATE files SET folder_name = ? WHERE folder_name = ? AND folder_id IS NULL')
+      .bind(safeName, folderName).run();
+    const allFiles = await env.DB.prepare('SELECT id, relative_path FROM files WHERE folder_name = ? AND folder_id IS NULL').bind(safeName).all();
+    for (const f of allFiles.results) {
+      if (f.relative_path && f.relative_path.startsWith(oldName + '/')) {
+        const newPath = safeName + f.relative_path.slice(oldName.length);
+        await env.DB.prepare('UPDATE files SET relative_path = ? WHERE id = ?').bind(newPath, f.id).run();
+      }
+    }
+  }
+
+  await trackUsage(env, 'd1_write');
+  return json({ ok: true, newName: safeName });
+}
+
+export async function handleCreateFolder(request, env) {
+  const { name } = await request.json();
+  if (!name || typeof name !== 'string' || !name.trim()) return error('文件夹名不能为空');
+  const safeName = name.trim().replace(/[\/]/g, '');
+  if (!safeName) return error('文件夹名无效');
+  const folderId = generateUUID();
+  // Create a placeholder entry so the folder shows up even if empty
+  // We use a special zero-size marker file
+  const markerId = generateUUID();
+  const r2Key = `folders/${folderId}/.folder`;
+  await env.BUCKET.put(r2Key, '', { httpMetadata: { contentType: 'application/x-folder' } });
+  await env.DB.prepare(
+    'INSERT INTO files (id, filename, size, content_type, r2_key, folder_name, relative_path, folder_id) VALUES (?, ?, 0, ?, ?, ?, ?, ?)'
+  ).bind(markerId, '.folder', 'application/x-folder', r2Key, safeName, safeName + '/.folder', folderId).run();
+  await trackUsage(env, 'd1_write');
+  await trackUsage(env, 'r2_class_a');
+  return json({ ok: true, folderId, name: safeName });
+}
+
+export async function handleMoveToFolder(request, env) {
+  const { fileIds, targetFolderId, targetFolderName } = await request.json();
+  if (!Array.isArray(fileIds) || !fileIds.length) return error('未选择文件');
+
+  let folderId = targetFolderId || null;
+  let folderName = targetFolderName || null;
+
+  if (folderId) {
+    // Verify folder exists
+    const folderFile = await env.DB.prepare('SELECT folder_name, folder_id FROM files WHERE folder_id = ? LIMIT 1').bind(folderId).first();
+    if (!folderFile) return error('目标文件夹不存在', 404);
+    folderName = folderFile.folder_name;
+  }
+
+  if (!folderId && !folderName) return error('请指定目标文件夹');
+
+  let moved = 0;
+  for (const id of fileIds) {
+    const file = await env.DB.prepare('SELECT id, filename FROM files WHERE id = ?').bind(id).first();
+    if (!file) continue;
+    const newRelativePath = folderName + '/' + file.filename;
+    await env.DB.prepare('UPDATE files SET folder_name = ?, folder_id = ?, relative_path = ? WHERE id = ?')
+      .bind(folderName, folderId, newRelativePath, id).run();
+    moved++;
+  }
+  await trackUsage(env, 'd1_write');
+  return json({ ok: true, moved });
+}
+
+export async function handleRemoveFromFolder(request, env) {
+  const { fileIds } = await request.json();
+  if (!Array.isArray(fileIds) || !fileIds.length) return error('未选择文件');
+  let moved = 0;
+  for (const id of fileIds) {
+    const file = await env.DB.prepare('SELECT id, filename FROM files WHERE id = ?').bind(id).first();
+    if (!file) continue;
+    await env.DB.prepare('UPDATE files SET folder_name = NULL, folder_id = NULL, relative_path = NULL, folder_share_key = NULL WHERE id = ?')
+      .bind(id).run();
+    moved++;
+  }
+  await trackUsage(env, 'd1_write');
+  return json({ ok: true, moved });
 }

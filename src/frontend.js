@@ -71,7 +71,7 @@ input:focus{outline:none;box-shadow:2px 2px 0 #000}
 
 function appStyles() {
   return `
-.container{max-width:960px;margin:0 auto;padding:20px}
+.container{max-width:1360px;margin:0 auto;padding:20px}
 header{border-bottom:3px solid #000;padding:16px 0;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center}
 header h1{font-size:22px;letter-spacing:-1px}
 nav button{margin-left:8px}
@@ -113,7 +113,7 @@ th{border-bottom:2px solid #000;font-weight:700;text-transform:uppercase;font-si
 .folder-toggle{background:none;border:none;font-size:14px;cursor:pointer;color:#000;padding:0}
 .folder-path{font-size:12px;color:#666;font-weight:400}
 .file-subpath{font-size:12px;color:#666;margin-top:2px}
-.file-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.file-actions{display:flex;gap:8px;flex-wrap:nowrap;align-items:center}
 .share-tree{border:2px solid #000;padding:12px;background:#fff}
 .share-tree-item{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #eee}
 .share-tree-item:last-child{border-bottom:none}
@@ -132,7 +132,7 @@ nav button{padding:5px 8px;font-size:11px}
 .card{padding:14px}
 table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;max-width:100%}
 th,td{padding:6px 8px;font-size:12px}
-.file-actions{gap:4px}
+.file-actions{gap:4px;flex-wrap:wrap}
 .file-actions .btn{padding:4px 8px;font-size:11px}
 .usage-grid{grid-template-columns:1fr}
 .modal{padding:20px;max-width:95vw}
@@ -352,8 +352,12 @@ async function loadFiles() {
     <span id="batchCount" style="font-size:13px;font-weight:700;margin-right:4px"></span>
     <button class="btn btn-sm btn-outline" onclick="batchShare()">批量分享</button>
     <button class="btn btn-sm btn-outline" onclick="batchUnshare()">批量取消分享</button>
+    <button class="btn btn-sm btn-outline" onclick="batchMoveToFolder()">移入文件夹</button>
     <button class="btn btn-sm btn-danger" onclick="batchDelete()">批量删除</button>
     <button class="btn btn-sm" style="margin-left:auto" onclick="clearSelect()">取消全选</button>
+  </div>
+  <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-sm btn-outline" onclick="showCreateFolderModal()">+ 新建文件夹</button>
   </div>
   <div id="fileList"><div class="empty">加载中...</div></div>\`;
 
@@ -722,6 +726,7 @@ function renderFolderRow(folder) {
     <td>\${folder.folderShareKey ? '<span style="color:#000">●文件夹已分享</span>' : '<span style="color:#666">○未分享</span>'}</td>
     <td><div class="file-actions">
       <button class="btn btn-sm btn-outline" onclick="toggleFolderSelection('\${encoded}', true)">选择</button>
+      <button class="btn btn-sm btn-outline" onclick="showRenameFolderModal('\${encoded}')">重命名</button>
       \${folder.folderShareKey
         ? \`<button class="btn btn-sm btn-outline" onclick="showFolderShareInfo('\${encoded}')">分享信息</button>
            <button class="btn btn-sm btn-danger" onclick="unshareFolder('\${encoded}')">取消分享</button>\`
@@ -745,10 +750,12 @@ function renderFileRow(file, isNested, folderName) {
     <td>\${file.share_key ? '<span style="color:#000">●已分享</span>' : file.folder_share_key ? '<span style="color:#666">◐文件夹已分享</span>' : '<span style="color:#999">○未分享</span>'}</td>
     <td><div class="file-actions">
       <button class="btn btn-sm" onclick="downloadFile('\${file.id}')">下载</button>
+      <button class="btn btn-sm btn-outline" onclick="showRenameFileModal('\${file.id}','\${esc(file.filename).replace(/'/g, "\\\\'")}')">重命名</button>
       \${file.share_key
         ? \`<button class="btn btn-sm btn-outline" onclick="showShareInfo('\${file.id}','\${file.share_key}')">分享信息</button>
            <button class="btn btn-sm btn-danger" onclick="unshareFile('\${file.id}')">取消分享</button>\`
         : \`<button class="btn btn-sm btn-outline" onclick="shareFile('\${file.id}')">分享</button>\`}
+      \${!isNested ? \`<button class="btn btn-sm btn-outline" onclick="showMoveFileModal('\${file.id}')">移入文件夹</button>\` : \`<button class="btn btn-sm btn-outline" onclick="removeFromFolder(['\${file.id}'])">移出</button>\`}
       <button class="btn btn-sm btn-danger" onclick="deleteFile('\${file.id}')">删除</button>
     </div></td>
   </tr>\`;
@@ -766,12 +773,14 @@ async function downloadFile(id) {
 window.downloadFile = downloadFile;
 
 async function shareFile(id) {
-  const r = await api('/files/' + id + '/share', { method: 'POST' });
-  const d = await r.json();
-  if (d.error) { toast(d.error); return; }
-  toast('分享链接已创建');
-  loadFiles();
-  showShareInfo(id, d.shareKey);
+  showCustomKeyModal('分享文件', async (customKey) => {
+    const r = await api('/files/' + id + '/share', { method: 'POST', body: JSON.stringify({ customKey: customKey || undefined }) });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    toast('分享链接已创建');
+    loadFiles();
+    showShareInfo(id, d.shareKey);
+  });
 }
 window.shareFile = shareFile;
 
@@ -893,15 +902,17 @@ function getFolderIds(encodedFolder) {
 async function shareFolder(encodedFolder) {
   const folder = folderLookup[encodedFolder];
   if (!folder) return;
-  const r = await api('/folders/share', {
-    method: 'POST',
-    body: JSON.stringify({ folderId: folder.folderId, folderName: folder.name }),
+  showCustomKeyModal('分享文件夹', async (customKey) => {
+    const r = await api('/folders/share', {
+      method: 'POST',
+      body: JSON.stringify({ folderId: folder.folderId, folderName: folder.name, customKey: customKey || undefined }),
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    toast('文件夹分享已创建');
+    loadFiles();
+    showFolderShareModal(folder.name, d.shareKey, d.fileCount);
   });
-  const d = await r.json();
-  if (d.error) { toast(d.error); return; }
-  toast('文件夹分享已创建');
-  loadFiles();
-  showFolderShareModal(folder.name, d.shareKey, d.fileCount);
 }
 window.shareFolder = shareFolder;
 
@@ -975,11 +986,13 @@ window.batchDelete = batchDelete;
 async function batchShare() {
   const ids = getSelectedIds();
   if (!ids.length) return;
-  const r = await api('/files/batch-share', { method: 'POST', body: JSON.stringify({ ids }) });
-  const d = await r.json();
-  if (d.error) { toast(d.error); return; }
-  toast(\`已为 \${d.shared} 个文件创建分享\`);
-  loadFiles();
+  showCustomKeyModal('批量分享', async (customKey) => {
+    const r = await api('/files/batch-share', { method: 'POST', body: JSON.stringify({ ids, customKey: customKey || undefined }) });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    toast(\`已为 \${d.shared} 个文件创建分享\`);
+    loadFiles();
+  });
 }
 window.batchShare = batchShare;
 
@@ -1103,6 +1116,194 @@ async function submitPasswordChange() {
   renderLogin();
 }
 window.submitPasswordChange = submitPasswordChange;
+
+// --- Custom key modal ---
+function showCustomKeyModal(title, onConfirm) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal">
+    <h3>\${esc(title)}</h3>
+    <div class="form-group">
+      <label>自定义密钥（可选）</label>
+      <input id="ckInput" type="text" placeholder="留空自动生成，仅支持字母数字_-，2-64位" maxlength="64">
+      <div style="font-size:11px;color:#999;margin-top:4px">支持字母、数字、下划线、横线。留空则自动生成随机密钥。</div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-sm" id="ckConfirmBtn">确认分享</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#ckInput');
+  input.focus();
+  const confirmBtn = overlay.querySelector('#ckConfirmBtn');
+  const doConfirm = () => {
+    const val = input.value.trim();
+    if (val && !/^[a-zA-Z0-9_\\-]{2,64}$/.test(val)) {
+      toast('密钥只能包含字母、数字、下划线和横线，长度2-64位');
+      return;
+    }
+    overlay.remove();
+    onConfirm(val || null);
+  };
+  confirmBtn.onclick = doConfirm;
+  input.onkeydown = e => { if (e.key === 'Enter') doConfirm(); };
+}
+
+// --- Rename modals ---
+function showRenameFileModal(id, currentName) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal">
+    <h3>重命名文件</h3>
+    <div class="form-group"><label>新文件名</label><input id="rfInput" type="text" value="\${esc(currentName)}"></div>
+    <div class="actions">
+      <button class="btn btn-sm" id="rfConfirmBtn">确认</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#rfInput');
+  input.focus();
+  input.select();
+  const doConfirm = async () => {
+    const val = input.value.trim();
+    if (!val) { toast('文件名不能为空'); return; }
+    const r = await api('/files/' + id + '/rename', { method: 'POST', body: JSON.stringify({ newName: val }) });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    overlay.remove();
+    toast('已重命名');
+    loadFiles();
+  };
+  overlay.querySelector('#rfConfirmBtn').onclick = doConfirm;
+  input.onkeydown = e => { if (e.key === 'Enter') doConfirm(); };
+}
+window.showRenameFileModal = showRenameFileModal;
+
+function showRenameFolderModal(encodedFolder) {
+  const folder = folderLookup[encodedFolder];
+  if (!folder) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal">
+    <h3>重命名文件夹</h3>
+    <div class="form-group"><label>新文件夹名</label><input id="rfdInput" type="text" value="\${esc(folder.name)}"></div>
+    <div class="actions">
+      <button class="btn btn-sm" id="rfdConfirmBtn">确认</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#rfdInput');
+  input.focus();
+  input.select();
+  const doConfirm = async () => {
+    const val = input.value.trim();
+    if (!val) { toast('文件夹名不能为空'); return; }
+    const r = await api('/folders/rename', { method: 'POST', body: JSON.stringify({ folderId: folder.folderId, folderName: folder.name, newName: val }) });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    overlay.remove();
+    toast('已重命名');
+    loadFiles();
+  };
+  overlay.querySelector('#rfdConfirmBtn').onclick = doConfirm;
+  input.onkeydown = e => { if (e.key === 'Enter') doConfirm(); };
+}
+window.showRenameFolderModal = showRenameFolderModal;
+
+// --- Create folder ---
+function showCreateFolderModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal">
+    <h3>新建文件夹</h3>
+    <div class="form-group"><label>文件夹名称</label><input id="cfInput" type="text" placeholder="输入文件夹名称"></div>
+    <div class="actions">
+      <button class="btn btn-sm" id="cfConfirmBtn">创建</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#cfInput');
+  input.focus();
+  const doConfirm = async () => {
+    const val = input.value.trim();
+    if (!val) { toast('文件夹名不能为空'); return; }
+    const r = await api('/folders/create', { method: 'POST', body: JSON.stringify({ name: val }) });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    overlay.remove();
+    toast('文件夹已创建');
+    loadFiles();
+  };
+  overlay.querySelector('#cfConfirmBtn').onclick = doConfirm;
+  input.onkeydown = e => { if (e.key === 'Enter') doConfirm(); };
+}
+window.showCreateFolderModal = showCreateFolderModal;
+
+// --- Move to folder ---
+function showMoveFileModal(fileId) {
+  showMoveModal([fileId]);
+}
+window.showMoveFileModal = showMoveFileModal;
+
+function batchMoveToFolder() {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  showMoveModal(ids);
+}
+window.batchMoveToFolder = batchMoveToFolder;
+
+function showMoveModal(fileIds) {
+  const folders = Object.values(folderLookup);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  let folderOptions = folders.map(f =>
+    \`<div style="padding:8px 12px;border:1px solid #ddd;margin-bottom:4px;cursor:pointer;font-size:13px" class="move-opt" data-fid="\${esc(f.folderId || '')}" data-fname="\${esc(f.name)}">\${esc(f.name)} (\${f.files.length} 个文件)</div>\`
+  ).join('');
+  if (!folders.length) folderOptions = '<div style="padding:12px;color:#999;font-size:13px">暂无文件夹，请先创建</div>';
+  overlay.innerHTML = \`<div class="modal">
+    <h3>移入文件夹</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:12px">选择目标文件夹（\${fileIds.length} 个文件）</p>
+    <div style="max-height:300px;overflow-y:auto;margin-bottom:16px">\${folderOptions}</div>
+    <div class="actions">
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.move-opt').forEach(el => {
+    el.onmouseover = () => el.style.background = '#f0f0f0';
+    el.onmouseout = () => el.style.background = '';
+    el.onclick = async () => {
+      const fid = el.dataset.fid;
+      const fname = el.dataset.fname;
+      const r = await api('/files/move', { method: 'POST', body: JSON.stringify({ fileIds, targetFolderId: fid || undefined, targetFolderName: fname }) });
+      const d = await r.json();
+      if (d.error) { toast(d.error); return; }
+      overlay.remove();
+      toast(\`已移动 \${d.moved} 个文件\`);
+      selectedIds.clear();
+      loadFiles();
+    };
+  });
+}
+
+async function removeFromFolder(fileIds) {
+  if (!confirm(\`确认将 \${fileIds.length} 个文件移出文件夹？\`)) return;
+  const r = await api('/files/remove-from-folder', { method: 'POST', body: JSON.stringify({ fileIds }) });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  toast(\`已移出 \${d.moved} 个文件\`);
+  loadFiles();
+}
+window.removeFromFolder = removeFromFolder;
 
 // --- Init ---
 checkAuth();

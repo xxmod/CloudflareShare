@@ -1,6 +1,6 @@
 import { json, error } from './utils.js';
 import { authenticate, requireAuth, handleLogin, handleLogout, handleSetup, handleCheckSetup, handleChangePassword } from './auth.js';
-import { handleUpload, handleDirectUploadInit, handleDirectUploadComplete, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder } from './files.js';
+import { handleUpload, handleDirectUploadInit, handleDirectUploadComplete, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder, handleRenameFile, handleRenameFolder, handleCreateFolder, handleMoveToFolder, handleRemoveFromFolder } from './files.js';
 import { getUsageStats, updateLimits } from './usage.js';
 import { getAppHTML, getSharePageHTML } from './frontend.js';
 import { migrate } from './migrate.js';
@@ -76,7 +76,7 @@ export default {
         if (fileIdMatch && method === 'DELETE') return handleDeleteFile(fileIdMatch[1], env);
 
         const shareMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})\/share$/);
-        if (shareMatch && method === 'POST') return handleShare(shareMatch[1], env);
+        if (shareMatch && method === 'POST') return handleShare(shareMatch[1], request, env);
 
         const unshareMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})\/unshare$/);
         if (unshareMatch && method === 'POST') return handleUnshare(unshareMatch[1], env);
@@ -87,21 +87,29 @@ export default {
           return handleBatchDelete(ids, env);
         }
         if (path === '/api/files/batch-share' && method === 'POST') {
-          const { ids } = await request.json();
-          return handleBatchShare(ids, env);
+          const { ids, customKey } = await request.json();
+          return handleBatchShare(ids, customKey, env);
         }
         if (path === '/api/files/batch-unshare' && method === 'POST') {
           const { ids } = await request.json();
           return handleBatchUnshare(ids, env);
         }
         if (path === '/api/folders/share' && method === 'POST') {
-          const { folderId, folderName } = await request.json();
-          return handleShareFolder({ folderId, folderName }, env);
+          const { folderId, folderName, customKey } = await request.json();
+          return handleShareFolder({ folderId, folderName, customKey }, env);
         }
         if (path === '/api/folders/unshare' && method === 'POST') {
           const { folderId, folderName } = await request.json();
           return handleUnshareFolder({ folderId, folderName }, env);
         }
+
+        // File/folder management
+        const renameMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})\/rename$/);
+        if (renameMatch && method === 'POST') return handleRenameFile(renameMatch[1], request, env);
+        if (path === '/api/folders/rename' && method === 'POST') return handleRenameFolder(request, env);
+        if (path === '/api/folders/create' && method === 'POST') return handleCreateFolder(request, env);
+        if (path === '/api/files/move' && method === 'POST') return handleMoveToFolder(request, env);
+        if (path === '/api/files/remove-from-folder' && method === 'POST') return handleRemoveFromFolder(request, env);
 
         // Usage
         if (path === '/api/usage' && method === 'GET') return json(await getUsageStats(env));
