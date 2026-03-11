@@ -159,7 +159,7 @@ export async function handleListFiles(env) {
   if (!d1Check.allowed) return error(d1Check.reason, 429);
 
   const result = await env.DB.prepare(
-    'SELECT id, filename, size, content_type, folder_name, relative_path, folder_id, folder_share_key, share_key, uploaded_at, expires_at FROM files ORDER BY uploaded_at DESC'
+    'SELECT id, filename, size, content_type, folder_name, relative_path, folder_id, folder_share_key, share_key, uploaded_at, expires_at, is_note FROM files ORDER BY uploaded_at DESC'
   ).all();
 
   await trackUsage(env, 'd1_read');
@@ -336,7 +336,7 @@ export async function handleGetByShareKey(key, env) {
   }
 
   const file = await env.DB.prepare(
-    'SELECT id, filename, size, content_type FROM files WHERE share_key = ?'
+    'SELECT id, filename, size, content_type, is_note FROM files WHERE share_key = ?'
   ).bind(key).first();
   if (!file) return error('Invalid key', 404);
   await trackUsage(env, 'd1_read');
@@ -369,10 +369,75 @@ export async function handleDownloadByShareKey(key, env, fileId = null) {
 }
 
 export async function handlePublicView(fileId, env, key) {
-  const file = await env.DB.prepare('SELECT id, filename, size, content_type FROM files WHERE id = ? AND share_key = ?').bind(fileId, key).first();
+  const file = await env.DB.prepare('SELECT id, filename, size, content_type, is_note FROM files WHERE id = ? AND share_key = ?').bind(fileId, key).first();
   if (!file) return error('File not found or invalid key', 404);
   await trackUsage(env, 'd1_read');
   return json(file);
+}
+
+export async function handleCreateNote(request, env) {
+  const { title, content } = await request.json();
+  if (!title || typeof title !== 'string' || !title.trim()) return error('标题不能为空');
+  if (typeof content !== 'string') return error('笔记内容不能为空');
+
+  const r2Check = await checkLimits(env, 'r2_class_a');
+  if (!r2Check.allowed) return error(r2Check.reason, 429);
+  const d1Check = await checkLimits(env, 'd1_write');
+  if (!d1Check.allowed) return error(d1Check.reason, 429);
+  const storageCheck = await checkLimits(env, 'r2_storage');
+  if (!storageCheck.allowed) return error(storageCheck.reason, 429);
+
+  const safeTitle = sanitizeFilename(title.trim()) || '未命名笔记';
+  const body = new TextEncoder().encode(content);
+  const id = generateUUID();
+  const r2Key = `notes/${id}/${safeTitle}`;
+
+  await env.BUCKET.put(r2Key, body, {
+    httpMetadata: { contentType: 'text/plain; charset=utf-8' },
+    customMetadata: {
+      originalName: safeTitle,
+      isNote: '1',
+    },
+  });
+
+  await env.DB.prepare(
+    'INSERT INTO files (id, filename, size, content_type, r2_key, is_note) VALUES (?, ?, ?, ?, ?, 1)'
+  ).bind(id, safeTitle, body.byteLength, 'text/plain; charset=utf-8', r2Key).run();
+
+  await trackUsage(env, 'r2_class_a');
+  await trackUsage(env, 'd1_write');
+  await updateStorageUsage(env);
+
+  return json({ ok: true, id, filename: safeTitle, size: body.byteLength, is_note: 1 });
+}
+
+export async function handleGetNoteContent(fileId, env, isPublic = false, key = null) {
+  const d1Check = await checkLimits(env, 'd1_read');
+  if (!d1Check.allowed) return error(d1Check.reason, 429);
+
+  const file = await env.DB.prepare('SELECT * FROM files WHERE id = ?').bind(fileId).first();
+  if (!file) return error('File not found', 404);
+  if (!file.is_note) return error('该文件不是笔记', 400);
+
+  if (isPublic) {
+    if (!file.share_key && !file.folder_share_key) return error('File is not shared', 403);
+    if (file.share_key !== key && file.folder_share_key !== key) return error('Invalid share key', 403);
+  }
+
+  const r2Check = await checkLimits(env, 'r2_class_b');
+  if (!r2Check.allowed) return error(r2Check.reason, 429);
+  const object = await env.BUCKET.get(file.r2_key);
+  if (!object) return error('File not found in storage', 404);
+
+  await trackUsage(env, 'd1_read');
+  await trackUsage(env, 'r2_class_b');
+
+  return json({
+    id: file.id,
+    filename: file.filename,
+    content: await object.text(),
+    is_note: 1,
+  });
 }
 
 function normalizeRelativePath(value) {

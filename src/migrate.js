@@ -16,6 +16,7 @@ export async function migrate(db) {
   await ensureColumn(db, 'files', 'relative_path', 'TEXT');
   await ensureColumn(db, 'files', 'folder_id', 'TEXT');
   await ensureColumn(db, 'files', 'folder_share_key', 'TEXT');
+  await ensureColumn(db, 'files', 'is_note', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 async function ensureColumn(db, table, column, type) {

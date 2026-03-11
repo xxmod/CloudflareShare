@@ -10,18 +10,32 @@ export function getSharePageHTML(file) {
 .share-card h2{margin:0 0 24px;font-size:20px}
 .file-info{margin-bottom:24px;padding:16px;background:#f5f5f5;border:1px solid #ddd}
 .file-info p{margin:4px 0;font-size:14px}
+.note-view{margin:0 0 24px;padding:16px;background:#f9f9f9;border:1px solid #ddd;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto}
 </style>
 </head>
 <body>
 <div class="share-card">
-<h2>文件分享</h2>
+<h2>${file.is_note ? '笔记分享' : '文件分享'}</h2>
 <div class="file-info">
 <p><strong>文件名：</strong><span title="${escapeHtml(file.filename)}">${escapeHtml(truncateDisplayText(file.filename))}</span></p>
 <p><strong>大小：</strong>${formatSize(file.size)}</p>
 <p><strong>类型：</strong>${escapeHtml(file.content_type)}</p>
 </div>
+${file.is_note ? '<div id="noteContent" class="note-view">加载中...</div>' : ''}
 <a href="/api/files/${file.id}/download?key=${file.share_key}" class="btn" style="display:inline-block;text-align:center;width:100%;box-sizing:border-box">下载文件</a>
 </div>
+${file.is_note ? `<script>
+fetch('/api/files/${file.id}/content?key=${encodeURIComponent(file.share_key)}')
+  .then(res => res.json())
+  .then(data => {
+    const el = document.getElementById('noteContent');
+    if (el) el.textContent = data.error || data.content || '无内容';
+  })
+  .catch(() => {
+    const el = document.getElementById('noteContent');
+    if (el) el.textContent = '加载失败';
+  });
+</script>` : ''}
 </body></html>`;
 }
 
@@ -123,6 +137,9 @@ th{border-bottom:2px solid #000;font-weight:700;text-transform:uppercase;font-si
 .share-tree-item:last-child{border-bottom:none}
 .share-tree-path{font-size:13px;font-weight:700;word-break:break-all}
 .share-tree-meta{font-size:12px;color:#666;margin-top:2px}
+.note-tag{display:inline-block;margin-left:8px;padding:2px 6px;border:1px solid #000;font-size:10px;font-weight:700;letter-spacing:1px;vertical-align:middle}
+.note-editor{width:100%;min-height:240px;padding:12px;border:2px solid #000;background:#fff;color:#000;font-size:14px;line-height:1.6;resize:vertical}
+.note-content{padding:14px;border:1px solid #ddd;background:#fafafa;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto}
 @media(max-width:640px){
 .container{padding:12px}
 header{flex-wrap:wrap;gap:8px}
@@ -273,8 +290,12 @@ async function lookupKey() {
     }
     r.innerHTML = \`<div style="padding:12px;border:2px solid #000">
       <div style="font-weight:700;font-size:14px;margin-bottom:4px" title="\${esc(data.filename)}">\${esc(truncateDisplayText(data.filename))}</div>
+      \${data.is_note ? '<div style="font-size:11px;font-weight:700;margin-bottom:8px">笔记</div>' : ''}
       <div style="font-size:12px;color:#666;margin-bottom:12px">\${formatSize(data.size)}</div>
-      <a href="/api/share/download?key=\${encodeURIComponent(key)}" class="btn btn-sm" style="display:inline-block">下载文件</a>
+      <div class="actions">
+        \${data.is_note ? \`<a href="/s/\${data.id}?key=\${encodeURIComponent(key)}" class="btn btn-sm btn-outline" style="display:inline-block">查看笔记</a>\` : ''}
+        <a href="/api/share/download?key=\${encodeURIComponent(key)}" class="btn btn-sm" style="display:inline-block">下载文件</a>
+      </div>
     </div>\`;
   } catch(e) { r.innerHTML = '<div style="padding:12px;border:1px solid #ddd;color:#666;font-size:13px">查找失败</div>'; }
 }
@@ -366,6 +387,7 @@ async function loadFiles() {
   </div>
   <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn btn-sm btn-outline" onclick="showCreateFolderModal()">+ 新建文件夹</button>
+    <button class="btn btn-sm" onclick="showCreateNoteModal()">+ 新建笔记</button>
   </div>
   <div id="fileList"><div class="empty">加载中...</div></div>\`;
 
@@ -750,13 +772,14 @@ function renderFileRow(file, isNested, folderName) {
   return \`<tr>
     <td><input type="checkbox" class="file-check" data-id="\${file.id}" data-folder="\${encodedFolder}" onchange="setFileSelection('\${file.id}', this.checked)" \${selectedIds.has(file.id) ? 'checked' : ''}></td>
     <td>
-      <div title="\${esc(file.filename)}">\${esc(truncateDisplayText(file.filename))}</div>
+      <div title="\${esc(file.filename)}">\${esc(truncateDisplayText(file.filename))}\${file.is_note ? '<span class="note-tag">笔记</span>' : ''}</div>
       \${subpath ? \`<div class="file-subpath">\${esc(subpath)}</div>\` : ''}
     </td>
     <td>\${formatSize(file.size)}</td>
     <td>\${file.uploaded_at}</td>
     <td>\${file.share_key ? '<span style="color:#000">●已分享</span>' : file.folder_share_key ? '<span style="color:#666">◐文件夹已分享</span>' : '<span style="color:#999">○未分享</span>'}</td>
     <td><div class="file-actions">
+      \${file.is_note ? \`<button class="btn btn-sm btn-outline" onclick="showViewNoteModal('\${file.id}')">查看</button>\` : ''}
       <button class="btn btn-sm" onclick="downloadFile('\${file.id}')">下载</button>
       <button class="btn btn-sm btn-outline" onclick="showRenameFileModal('\${file.id}','\${esc(file.filename).replace(/'/g, "\\\\'")}')">重命名</button>
       \${file.share_key
@@ -1254,6 +1277,60 @@ function showCreateFolderModal() {
   input.onkeydown = e => { if (e.key === 'Enter') doConfirm(); };
 }
 window.showCreateFolderModal = showCreateFolderModal;
+
+function showCreateNoteModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal" style="max-width:720px">
+    <h3>新建笔记</h3>
+    <div class="form-group"><label>笔记标题</label><input id="noteTitleInput" type="text" placeholder="输入笔记标题"></div>
+    <div class="form-group"><label>笔记内容</label><textarea id="noteBodyInput" class="note-editor" placeholder="输入要保存和分享的文本"></textarea></div>
+    <div class="actions">
+      <button class="btn btn-sm" id="noteCreateBtn">创建笔记</button>
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">取消</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  const titleInput = overlay.querySelector('#noteTitleInput');
+  const bodyInput = overlay.querySelector('#noteBodyInput');
+  titleInput.focus();
+  const doCreate = async () => {
+    const title = titleInput.value.trim();
+    const content = bodyInput.value;
+    if (!title) { toast('笔记标题不能为空'); return; }
+    if (!content.trim()) { toast('笔记内容不能为空'); return; }
+    const r = await api('/notes', { method: 'POST', body: JSON.stringify({ title, content }) });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    overlay.remove();
+    toast('笔记已创建');
+    loadFiles();
+  };
+  overlay.querySelector('#noteCreateBtn').onclick = doCreate;
+  bodyInput.onkeydown = e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') doCreate();
+  };
+}
+window.showCreateNoteModal = showCreateNoteModal;
+
+async function showViewNoteModal(id) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = \`<div class="modal" style="max-width:760px">
+    <h3>查看笔记</h3>
+    <div id="viewNoteContent" class="note-content">加载中...</div>
+    <div class="actions" style="margin-top:16px">
+      <button class="btn btn-sm btn-outline" onclick="this.closest('.modal-overlay').remove()">关闭</button>
+    </div>
+  </div>\`;
+  document.body.appendChild(overlay);
+  const r = await api('/files/' + id + '/content', { method: 'GET' });
+  const d = await r.json();
+  overlay.querySelector('#viewNoteContent').textContent = d.error || d.content || '无内容';
+}
+window.showViewNoteModal = showViewNoteModal;
 
 // --- Move to folder ---
 function showMoveFileModal(fileId) {

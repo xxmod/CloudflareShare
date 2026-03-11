@@ -1,6 +1,6 @@
 import { json, error } from './utils.js';
 import { authenticate, requireAuth, handleLogin, handleLogout, handleSetup, handleCheckSetup, handleChangePassword } from './auth.js';
-import { handleUpload, handleDirectUploadInit, handleDirectUploadComplete, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder, handleRenameFile, handleRenameFolder, handleCreateFolder, handleMoveToFolder, handleRemoveFromFolder } from './files.js';
+import { handleUpload, handleDirectUploadInit, handleDirectUploadComplete, handleListFiles, handleDeleteFile, handleShare, handleUnshare, handleDownload, handleGetByShareKey, handleDownloadByShareKey, handleBatchDelete, handleBatchShare, handleBatchUnshare, handleShareFolder, handleUnshareFolder, handleRenameFile, handleRenameFolder, handleCreateFolder, handleMoveToFolder, handleRemoveFromFolder, handleCreateNote, handleGetNoteContent } from './files.js';
 import { getUsageStats, updateLimits } from './usage.js';
 import { getAppHTML, getSharePageHTML } from './frontend.js';
 import { migrate } from './migrate.js';
@@ -21,7 +21,7 @@ export default {
           return new Response(keyInputPageHTML(fileId), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
         }
         const file = await env.DB.prepare(
-          'SELECT id, filename, size, content_type, share_key FROM files WHERE id = ? AND share_key = ?'
+          'SELECT id, filename, size, content_type, share_key, is_note FROM files WHERE id = ? AND share_key = ?'
         ).bind(fileId, key).first();
         if (!file) return error('File not found or invalid key', 404);
         return new Response(getSharePageHTML(file), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
@@ -49,6 +49,7 @@ export default {
 
         // Public file download with key
         const dlMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})\/download$/);
+        const contentMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})\/content$/);
         if (dlMatch && method === 'GET') {
           const key = url.searchParams.get('key');
           if (key) {
@@ -58,6 +59,15 @@ export default {
           const authErr = await requireAuth(request, env);
           if (authErr) return authErr;
           return handleDownload(dlMatch[1], env);
+        }
+        if (contentMatch && method === 'GET') {
+          const key = url.searchParams.get('key');
+          if (key) {
+            return handleGetNoteContent(contentMatch[1], env, true, key);
+          }
+          const authErr = await requireAuth(request, env);
+          if (authErr) return authErr;
+          return handleGetNoteContent(contentMatch[1], env);
         }
 
         // All other API routes require auth
@@ -71,6 +81,7 @@ export default {
         if (path === '/api/files/upload/direct/init' && method === 'POST') return handleDirectUploadInit(request, env);
         if (path === '/api/files/upload/direct/complete' && method === 'POST') return handleDirectUploadComplete(request, env);
         if (path === '/api/files/upload' && method === 'POST') return handleUpload(request, env);
+        if (path === '/api/notes' && method === 'POST') return handleCreateNote(request, env);
 
         const fileIdMatch = path.match(/^\/api\/files\/([0-9a-f-]{36})$/);
         if (fileIdMatch && method === 'DELETE') return handleDeleteFile(fileIdMatch[1], env);

@@ -342,6 +342,41 @@ describe('CloudflareShare', () => {
     expect(afterUnshare.status).toBe(404);
   });
 
+  it('creates notes, reads content, and serves shared note content publicly', async () => {
+    const cookie = await setupAndLogin();
+
+    const createRes = await authCall('/api/notes', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ title: 'meeting-note', content: 'line one\nline two' }),
+    });
+    expect(createRes.status).toBe(200);
+    const created = await createRes.json();
+    expect(created.is_note).toBe(1);
+
+    const listRes = await authCall('/api/files', cookie);
+    const files = await listRes.json();
+    expect(files).toHaveLength(1);
+    expect(files[0].is_note).toBe(1);
+
+    const contentRes = await authCall(`/api/files/${created.id}/content`, cookie);
+    expect(contentRes.status).toBe(200);
+    const content = await contentRes.json();
+    expect(content.content).toBe('line one\nline two');
+
+    const shareRes = await authCall(`/api/files/${created.id}/share`, cookie, { method: 'POST' });
+    expect(shareRes.status).toBe(200);
+    const shareData = await shareRes.json();
+
+    const publicContentRes = await call(`/api/files/${created.id}/content?key=${shareData.shareKey}`);
+    expect(publicContentRes.status).toBe(200);
+    expect((await publicContentRes.json()).content).toBe('line one\nline two');
+
+    const publicPageRes = await call(`/s/${created.id}?key=${shareData.shareKey}`);
+    expect(publicPageRes.status).toBe(200);
+    expect(await publicPageRes.text()).toContain('笔记分享');
+  });
+
   it('usage stats and limits management', async () => {
     const cookie = await setupAndLogin();
 
