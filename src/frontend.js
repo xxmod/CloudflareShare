@@ -16,7 +16,7 @@ export function getSharePageHTML(file) {
 <div class="share-card">
 <h2>文件分享</h2>
 <div class="file-info">
-<p><strong>文件名：</strong>${escapeHtml(file.filename)}</p>
+<p><strong>文件名：</strong><span title="${escapeHtml(file.filename)}">${escapeHtml(truncateDisplayText(file.filename))}</span></p>
 <p><strong>大小：</strong>${formatSize(file.size)}</p>
 <p><strong>类型：</strong>${escapeHtml(file.content_type)}</p>
 </div>
@@ -42,6 +42,10 @@ export function getAppHTML() {
 
 function escapeHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function truncateDisplayText(str, maxLength = 30) {
+  const value = String(str || '');
+  return value.length > maxLength ? value.slice(0, maxLength) + '...' : value;
 }
 
 function formatSize(bytes) {
@@ -71,7 +75,7 @@ input:focus{outline:none;box-shadow:2px 2px 0 #000}
 
 function appStyles() {
   return `
-.container{max-width:1360px;margin:0 auto;padding:20px}
+.container{max-width:1160px;margin:0 auto;padding:20px}
 header{border-bottom:3px solid #000;padding:16px 0;margin-bottom:24px;display:flex;justify-content:space-between;align-items:center}
 header h1{font-size:22px;letter-spacing:-1px}
 nav button{margin-left:8px}
@@ -189,6 +193,10 @@ function formatSize(b) {
 function formatNum(n) {
   return Number(n||0).toLocaleString();
 }
+function truncateDisplayText(str, maxLength = 30) {
+  const value = String(str || '');
+  return value.length > maxLength ? value.slice(0, maxLength) + '...' : value;
+}
 
 // --- Auth ---
 async function checkAuth() {
@@ -264,7 +272,7 @@ async function lookupKey() {
       return;
     }
     r.innerHTML = \`<div style="padding:12px;border:2px solid #000">
-      <div style="font-weight:700;font-size:14px;margin-bottom:4px">\${esc(data.filename)}</div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:4px" title="\${esc(data.filename)}">\${esc(truncateDisplayText(data.filename))}</div>
       <div style="font-size:12px;color:#666;margin-bottom:12px">\${formatSize(data.size)}</div>
       <a href="/api/share/download?key=\${encodeURIComponent(key)}" class="btn btn-sm" style="display:inline-block">下载文件</a>
     </div>\`;
@@ -278,7 +286,7 @@ function renderSharedFolderResult(key, data) {
     <div style="font-size:12px;color:#666;margin-bottom:12px">\${data.files.length} 个文件</div>
     <div class="share-tree">\${data.files.map(file => \`<div class="share-tree-item">
       <div>
-        <div class="share-tree-path">\${esc(getShareDisplayPath(file, data.folderName))}</div>
+        <div class="share-tree-path" title="\${esc(getShareDisplayPath(file, data.folderName))}">\${esc(truncateDisplayText(getShareDisplayPath(file, data.folderName)))}</div>
         <div class="share-tree-meta">\${formatSize(file.size)}</div>
       </div>
       <a href="/api/share/download?key=\${encodeURIComponent(key)}&id=\${encodeURIComponent(file.id)}" class="btn btn-sm">下载</a>
@@ -742,7 +750,7 @@ function renderFileRow(file, isNested, folderName) {
   return \`<tr>
     <td><input type="checkbox" class="file-check" data-id="\${file.id}" data-folder="\${encodedFolder}" onchange="setFileSelection('\${file.id}', this.checked)" \${selectedIds.has(file.id) ? 'checked' : ''}></td>
     <td>
-      <div>\${esc(file.filename)}</div>
+      <div title="\${esc(file.filename)}">\${esc(truncateDisplayText(file.filename))}</div>
       \${subpath ? \`<div class="file-subpath">\${esc(subpath)}</div>\` : ''}
     </td>
     <td>\${formatSize(file.size)}</td>
