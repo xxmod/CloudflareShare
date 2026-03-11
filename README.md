@@ -1,6 +1,6 @@
 # CloudflareShare
 
-基于 Cloudflare Workers、D1 和 R2 的单用户文件存储与分享服务。
+> 基于 Cloudflare Workers、D1 和 R2 的单用户文件存储与分享服务。
 
 前端页面由 Worker 直接输出，文件元数据存储在 D1，文件内容存储在 R2。较大文件上传采用浏览器直传 R2 的方式，避免文件流经过 Worker。
 
@@ -53,22 +53,22 @@ npm install
 ### 1. 创建 D1 数据库
 
 ```bash
-wrangler d1 create <your-d1-name>
+wrangler d1 create cloudflare-share-db
 ```
 
-把输出里的 `database_id` 填入 `wrangler.toml`：
+把输出里的 `database_id` 填入 `wrangler.toml`（项目中默认有`wrangler.toml.example`，可重命名为`wrangler.toml`）：
 
 ```toml
 [[d1_databases]]
 binding = "DB"
-database_name = "<your-d1-name>"
-database_id = "<your-d1-database-id>"
+database_name = "cloudflare-share-db"
+database_id = "databaseID填入此处"
 ```
 
 ### 2. 创建 R2 存储桶
 
 ```bash
-wrangler r2 bucket create <your-r2-bucket>
+wrangler r2 bucket create cloudflare-share-file
 ```
 
 把桶名填入 `wrangler.toml`：
@@ -76,17 +76,27 @@ wrangler r2 bucket create <your-r2-bucket>
 ```toml
 [[r2_buckets]]
 binding = "BUCKET"
-bucket_name = "<your-r2-bucket>"
+bucket_name = "cloudflare-share-file"
 ```
 
 ### 3. 配置直传 R2 所需变量
 
 浏览器直传 R2 需要 Worker 生成预签名 URL，因此还需要在 `wrangler.toml` 中配置公开变量：
 
+#### （1）找到ID
+
+进入Cloudflare控制台首页，找到如图处即为CF账户ID
+
+![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/cloudflare-id.png "")
+
+#### （2）填写信息到 `wrangler.toml`
+
+添加如下信息到 `wrangler.toml`
+
 ```toml
 [vars]
-R2_ACCOUNT_ID = "<your-cloudflare-account-id>"
-R2_BUCKET_NAME = "<your-r2-bucket>"
+R2_ACCOUNT_ID = "CF的账号ID"
+R2_BUCKET_NAME = "cloudflare-share-file"
 ```
 
 说明：
@@ -96,20 +106,48 @@ R2_BUCKET_NAME = "<your-r2-bucket>"
 
 ### 4. 配置 R2 S3 API Secret
 
-预签名 URL 需要使用 R2 S3 API 凭证生成。将下面两个值写入 Worker secrets：
+#### (1)找到R2_ACCESS_KEY_ID与R2_SECRET_ACCESS_KEY
+
+##### 进入R2对象存储界面
+
+点击Manage
+
+![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-1.png "")
+
+##### 进入API令牌界面
+
+点击创建Account API令牌
+
+![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-2.png "")
+
+##### 配置权限
+
+给予管理员读写权限并生成
+
+![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-3.png "")
+
+##### 记录R2_ACCESS_KEY_ID与R2_SECRET_ACCESS_KEY
+
+访问密钥ID为R2_ACCESS_KEY_ID
+机密访问密钥为R2_SECRET_ACCESS_KEY
+
+![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-4.png "")
+
+#### (2)写入secret中
+
+将两个值写入 Worker secrets：
 
 ```bash
 wrangler secret put R2_ACCESS_KEY_ID
 wrangler secret put R2_SECRET_ACCESS_KEY
 ```
 
-这两个值需要在 Cloudflare Dashboard 的 R2 API Tokens 页面创建。
 
 ### 5. 配置 R2 CORS
 
 如果不配置 CORS，浏览器无法直接把文件上传到 R2。
 
-Wrangler CLI 接受的 CORS JSON 结构如下：
+Wrangler CLI 接受的 CORS JSON 结构如下，根目录下给出`r2-cors.json.example`做实例，可更改为`r2-cors.json`：
 
 ```json
 {
@@ -117,8 +155,8 @@ Wrangler CLI 接受的 CORS JSON 结构如下：
     {
       "allowed": {
         "origins": [
-          "https://your-app.example.com",
-          "http://localhost:8787"
+          "https://your-app.example.com", //此处根据实际情况写，可以填 Worker地址
+          "http://localhost:8787"         //也可以加上你配置的自定义域与本地测试地址
         ],
         "methods": [
           "PUT",
@@ -141,13 +179,13 @@ Wrangler CLI 接受的 CORS JSON 结构如下：
 保存为一个 JSON 文件后执行：
 
 ```bash
-wrangler r2 bucket cors set <your-r2-bucket> --file ./r2-cors.json
+wrangler r2 bucket cors set cloudflare-share-file --file ./r2-cors.json
 ```
 
 查看当前配置：
 
 ```bash
-wrangler r2 bucket cors list <your-r2-bucket>
+wrangler r2 bucket cors list cloudflare-share-file
 ```
 
 ### 6. 部署 Worker
