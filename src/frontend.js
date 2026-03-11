@@ -6,7 +6,7 @@ export function getSharePageHTML(file) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>文件分享 - ${escapeHtml(file.filename)}</title>
 <style>${baseStyles()}
-.share-card{max-width:480px;margin:80px auto;border:2px solid #000;padding:40px}
+.share-card{max-width:480px;margin:80px auto;border:2px solid #000;padding:40px;width:90%;box-sizing:border-box}
 .share-card h2{margin:0 0 24px;font-size:20px}
 .file-info{margin-bottom:24px;padding:16px;background:#f5f5f5;border:1px solid #ddd}
 .file-info p{margin:4px 0;font-size:14px}
@@ -102,6 +102,7 @@ th{border-bottom:2px solid #000;font-weight:700;text-transform:uppercase;font-si
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .share-info{background:#f5f5f5;padding:12px;border:1px solid #ddd;margin-top:8px;font-size:12px;word-break:break-all}
 .empty{text-align:center;padding:40px;color:#999}
+.table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
 .login-card{max-width:400px;margin:100px auto;border:3px solid #000;padding:40px}
 .login-card h2{margin-bottom:24px;font-size:24px}
 .upload-status{border:2px solid #000;padding:14px;margin:-8px 0 16px;background:#fafafa}
@@ -118,6 +119,29 @@ th{border-bottom:2px solid #000;font-weight:700;text-transform:uppercase;font-si
 .share-tree-item:last-child{border-bottom:none}
 .share-tree-path{font-size:13px;font-weight:700;word-break:break-all}
 .share-tree-meta{font-size:12px;color:#666;margin-top:2px}
+@media(max-width:640px){
+.container{padding:12px}
+header{flex-wrap:wrap;gap:8px}
+header h1{font-size:18px}
+nav{display:flex;gap:4px}
+nav button{padding:5px 8px;font-size:11px}
+.tab-bar{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tab{padding:8px 12px;font-size:11px;white-space:nowrap}
+.upload-zone{padding:20px 12px}
+.upload-zone p{font-size:13px}
+.card{padding:14px}
+table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;max-width:100%}
+th,td{padding:6px 8px;font-size:12px}
+.file-actions{gap:4px}
+.file-actions .btn{padding:4px 8px;font-size:11px}
+.usage-grid{grid-template-columns:1fr}
+.modal{padding:20px;max-width:95vw}
+.share-info{font-size:12px !important;letter-spacing:1px !important}
+.upload-status{padding:10px}
+.upload-meta{font-size:11px;gap:8px}
+.upload-current{font-size:12px}
+#batchBar{font-size:12px;padding:8px 10px}
+}
 `;
 }
 
@@ -319,8 +343,8 @@ async function loadFiles() {
     <p style="font-size:15px;font-weight:700;margin-bottom:4px">拖拽文件到此处上传</p>
     <p style="font-size:12px;color:#666;margin-bottom:12px">或使用按钮选择文件 / 文件夹</p>
     <div style="display:flex;gap:8px;justify-content:center">
-      <label class="btn btn-sm" style="cursor:pointer">选择文件<input type="file" id="fileInput" style="display:none" multiple onchange="uploadFiles(this.files, false)"></label>
-      <label class="btn btn-sm btn-outline" style="cursor:pointer">上传文件夹<input type="file" id="folderInput" style="display:none" webkitdirectory onchange="uploadFiles(this.files, true)"></label>
+      <label class="btn btn-sm" style="cursor:pointer">选择文件<input type="file" id="fileInput" style="display:none" multiple accept="*/*" onchange="uploadFiles(this.files, false)"></label>
+      <label class="btn btn-sm btn-outline" style="cursor:pointer">上传文件夹<input type="file" id="folderInput" style="display:none" webkitdirectory accept="*/*" onchange="uploadFiles(this.files, true)"></label>
     </div>
   </div>
   <div id="uploadStatus"></div>
@@ -637,12 +661,12 @@ function renderFileTable(files) {
     rows.push(grouped.files.map(file => renderFileRow(file, false)).join(''));
   }
 
-  return \`<table>
+  return \`<div class="table-wrap"><table>
     <thead><tr>
       <th style="width:32px"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)"></th>
       <th>文件 / 文件夹</th><th>大小</th><th>上传时间</th><th>分享状态</th><th>操作</th>
     </tr></thead>
-    <tbody>\${rows.join('')}</tbody></table>\`;
+    <tbody>\${rows.join('')}</tbody></table></div>\`;
 }
 
 function groupFiles(files) {
