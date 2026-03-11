@@ -50,6 +50,8 @@ npm install
 
 ## 部署
 
+克隆本仓库
+
 ### 1. 创建 D1 数据库
 
 ```bash
@@ -112,26 +114,26 @@ R2_BUCKET_NAME = "cloudflare-share-file"
 
 点击Manage
 
-![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-1.png "")
+![r2-key-1.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-1.png "")
 
 ##### 进入API令牌界面
 
 点击创建Account API令牌
 
-![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-2.png "")
+![r2-key-2.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-2.png "")
 
 ##### 配置权限
 
 给予管理员读写权限并生成
 
-![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-3.png "")
+![r2-key-3.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-3.png "")
 
 ##### 记录R2_ACCESS_KEY_ID与R2_SECRET_ACCESS_KEY
 
 访问密钥ID为R2_ACCESS_KEY_ID
 机密访问密钥为R2_SECRET_ACCESS_KEY
 
-![cloudflare-id.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-4.png "")
+![r2-key-4.png](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/r2-key-4.png "")
 
 #### (2)写入secret中
 
@@ -285,6 +287,16 @@ test/
 schema.sql       # 数据结构参考
 wrangler.toml    # 实际部署配置
 ```
+
+## 网页截图
+
+![web-shot1](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/web-shot1.png "")
+
+![web-shot2](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/web-shot2.png "")
+
+![web-shot3](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/web-shot3.png "")
+
+![web-shot4](https://raw.githubusercontent.com/xxmod/CloudflareShare/refs/heads/main/screenshots/web-shot4.png "")
 
 ## 安全建议
 
