@@ -377,7 +377,6 @@ export async function handlePublicView(fileId, env, key) {
 
 export async function handleCreateNote(request, env) {
   const { title, content } = await request.json();
-  if (!title || typeof title !== 'string' || !title.trim()) return error('标题不能为空');
   if (typeof content !== 'string') return error('笔记内容不能为空');
 
   const r2Check = await checkLimits(env, 'r2_class_a');
@@ -387,7 +386,9 @@ export async function handleCreateNote(request, env) {
   const storageCheck = await checkLimits(env, 'r2_storage');
   if (!storageCheck.allowed) return error(storageCheck.reason, 429);
 
-  const safeTitle = sanitizeFilename(title.trim()) || '未命名笔记';
+  const safeTitle = typeof title === 'string' && title.trim()
+    ? sanitizeFilename(title.trim())
+    : await getNextDefaultNoteTitle(env);
   const body = new TextEncoder().encode(content);
   const id = generateUUID();
   const r2Key = `notes/${id}/${safeTitle}`;
@@ -409,6 +410,22 @@ export async function handleCreateNote(request, env) {
   await updateStorageUsage(env);
 
   return json({ ok: true, id, filename: safeTitle, size: body.byteLength, is_note: 1 });
+}
+
+async function getNextDefaultNoteTitle(env) {
+  const result = await env.DB.prepare(
+    "SELECT filename FROM files WHERE is_note = 1 AND filename GLOB '笔记*'"
+  ).all();
+  let nextIndex = 1;
+  for (const row of result.results || []) {
+    const match = String(row.filename || '').match(/^笔记(\d+)$/);
+    if (!match) continue;
+    const value = Number.parseInt(match[1], 10);
+    if (Number.isFinite(value) && value >= nextIndex) {
+      nextIndex = value + 1;
+    }
+  }
+  return `笔记${nextIndex}`;
 }
 
 export async function handleGetNoteContent(fileId, env, isPublic = false, key = null) {

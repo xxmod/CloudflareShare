@@ -23,6 +23,9 @@ export async function handleLogin(request, env) {
   const { username, password } = await request.json();
   if (!username || !password) return error('Username and password required');
 
+  const userCount = await env.DB.prepare('SELECT COUNT(*) as cnt FROM user').first();
+  if ((userCount?.cnt || 0) > 1) return error('User store is inconsistent; single-admin mode only', 503);
+
   const hash = await hashPassword(password);
   const user = await env.DB.prepare(
     'SELECT * FROM user WHERE username = ? AND password_hash = ?'
@@ -40,7 +43,7 @@ export async function handleLogin(request, env) {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': `session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_DURATION_HOURS * 3600}`,
+      'Set-Cookie': `session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${SESSION_DURATION_HOURS * 3600}`,
     },
   });
 }
@@ -54,7 +57,7 @@ export async function handleLogout(request, env) {
   return new Response(JSON.stringify({ ok: true }), {
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': 'session=; Path=/; HttpOnly; Max-Age=0',
+      'Set-Cookie': 'session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0',
     },
   });
 }
@@ -78,7 +81,7 @@ export async function handleChangePassword(request, env) {
     status: 200,
     headers: {
       'Content-Type': 'application/json',
-      'Set-Cookie': 'session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
+      'Set-Cookie': 'session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0',
     },
   });
 }
@@ -93,7 +96,14 @@ export async function handleSetup(request, env) {
   if (password.length < 6) return error('Password must be at least 6 characters');
 
   const hash = await hashPassword(password);
-  await env.DB.prepare('INSERT INTO user (username, password_hash) VALUES (?, ?)').bind(username, hash).run();
+  try {
+    await env.DB.prepare('INSERT INTO user (id, username, password_hash) VALUES (1, ?, ?)').bind(username, hash).run();
+  } catch (setupError) {
+    if (String(setupError?.message || setupError).toLowerCase().includes('unique')) {
+      return error('User already exists', 409);
+    }
+    throw setupError;
+  }
   return json({ ok: true });
 }
 

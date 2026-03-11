@@ -1284,7 +1284,7 @@ function showCreateNoteModal() {
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = \`<div class="modal" style="max-width:720px">
     <h3>新建笔记</h3>
-    <div class="form-group"><label>笔记标题</label><input id="noteTitleInput" type="text" placeholder="输入笔记标题"></div>
+    <div class="form-group"><label>笔记标题（可选）</label><input id="noteTitleInput" type="text" placeholder="留空将自动命名为笔记1、笔记2..." ></div>
     <div class="form-group"><label>笔记内容</label><textarea id="noteBodyInput" class="note-editor" placeholder="输入要保存和分享的文本"></textarea></div>
     <div class="actions">
       <button class="btn btn-sm" id="noteCreateBtn">创建笔记</button>
@@ -1298,7 +1298,6 @@ function showCreateNoteModal() {
   const doCreate = async () => {
     const title = titleInput.value.trim();
     const content = bodyInput.value;
-    if (!title) { toast('笔记标题不能为空'); return; }
     if (!content.trim()) { toast('笔记内容不能为空'); return; }
     const r = await api('/notes', { method: 'POST', body: JSON.stringify({ title, content }) });
     const d = await r.json();

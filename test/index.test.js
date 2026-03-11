@@ -375,6 +375,22 @@ describe('CloudflareShare', () => {
     const publicPageRes = await call(`/s/${created.id}?key=${shareData.shareKey}`);
     expect(publicPageRes.status).toBe(200);
     expect(await publicPageRes.text()).toContain('笔记分享');
+
+    const untitledOneRes = await authCall('/api/notes', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ title: '', content: 'untitled one' }),
+    });
+    expect(untitledOneRes.status).toBe(200);
+    expect((await untitledOneRes.json()).filename).toBe('笔记1');
+
+    const untitledTwoRes = await authCall('/api/notes', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ title: '   ', content: 'untitled two' }),
+    });
+    expect(untitledTwoRes.status).toBe(200);
+    expect((await untitledTwoRes.json()).filename).toBe('笔记2');
   });
 
   it('usage stats and limits management', async () => {
